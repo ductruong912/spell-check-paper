@@ -3,3 +3,7 @@ python-docx
 pywintypes
 streamlit
 pdfplumber
+language-tool-python
+requests
+python-dotenv
+google-api-python-client

@@ -5,9 +5,20 @@ import pdfplumber
 import win32com.client
 import pythoncom
 
-WORD_RE = re.cache = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
+try:
+    import language_tool_python
+    LANGUAGE_TOOL_AVAILABLE = True
+except ImportError:
+    LANGUAGE_TOOL_AVAILABLE = False
+
+WORD_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
+VIETNAMESE_CHARS = re.compile(r"[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ]")
+
+# Cache for LanguageTool instances
+_language_tool_cache = {}
 
 def extract_text_from_docx(path: str) -> str:
+    """Extract text from DOCX."""
     doc = Document(path)
     parts = []
     for p in doc.paragraphs:
@@ -17,6 +28,7 @@ def extract_text_from_docx(path: str) -> str:
     return "\n".join(parts)
 
 def extract_text_from_pdf(path: str) -> str:
+    """Extract text from PDF."""
     parts = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -25,12 +37,70 @@ def extract_text_from_pdf(path: str) -> str:
                 parts.append(t)
     return "\n\n".join(parts)
 
+def detect_language(text: str) -> str:
+    """Detect if text is primarily Vietnamese or English.
+    Returns: 'vi' or 'en'
+    """
+    # Count Vietnamese characters
+    vietnamese_count = len(VIETNAMESE_CHARS.findall(text))
+    # Count English words
+    english_count = len(WORD_RE.findall(text))
+    
+    # If has Vietnamese chars, consider it Vietnamese
+    if vietnamese_count > 10:
+        return 'vi'
+    return 'en'
+
+def spellcheck_vietnamese(text: str) -> List[Dict]:
+    """Vietnamese spell checking is not supported.
+    Returns: empty list (no checks performed)
+    """
+    # Unfortunately, there is no good Vietnamese spell checker available
+    # LanguageTool doesn't support Vietnamese
+    # Word COM API doesn't support Vietnamese well
+    # Return empty list - no spell checking for Vietnamese
+    return []
+
+def spellcheck_english_with_languagetool(text: str) -> List[Dict]:
+    """Check English spelling using LanguageTool.
+    Returns: [{id,type,offset,length,original,suggestions,message}]
+    """
+    if not LANGUAGE_TOOL_AVAILABLE:
+        # Fallback to Word COM API
+        return spellcheck_english_with_word(text)
+    
+    try:
+        # Use cached LanguageTool instance
+        if 'en' not in _language_tool_cache:
+            _language_tool_cache['en'] = language_tool_python.LanguageTool('en-US')
+        
+        tool = _language_tool_cache['en']
+        matches = tool.check(text)
+        
+        issues = []
+        for idx, match in enumerate(matches, 1):
+            # Filter out some noise - only spelling errors
+            if match.ruleId.startswith('MORFOLOGIK_RULE') or 'SPELLER' in match.ruleId:
+                issues.append({
+                    "id": str(idx),
+                    "type": "spelling",
+                    "offset": match.offset,
+                    "length": match.errorLength,
+                    "original": text[match.offset:match.offset + match.errorLength],
+                    "suggestions": match.replacements[:5] if match.replacements else [],
+                    "message": match.message
+                })
+        
+        return issues
+        
+    except Exception as e:
+        # Fallback to Word COM API
+        return spellcheck_english_with_word(text)
+
 def spellcheck_english_with_word(text: str) -> List[Dict]:
+    """Check spelling and return issues.
+    Returns: [{id,type,offset,length,original,suggestions,message}]
     """
-    Returns issues: [{id,type,offset,length,original,suggestions,message}]
-    Uses Word dictionary engine; needs at least one open doc for suggestions.
-    """
-    # Initialize COM for this thread
     pythoncom.CoInitialize()
     
     app = None
@@ -88,3 +158,16 @@ def spellcheck_english_with_word(text: str) -> List[Dict]:
             app.Quit()
         # Uninitialize COM
         pythoncom.CoUninitialize()
+
+def spellcheck_auto(text: str) -> List[Dict]:
+    """Automatically detect language and use appropriate spell checker.
+    Returns: [{id,type,offset,length,original,suggestions,message}]
+    """
+    lang = detect_language(text)
+    
+    if lang == 'vi':
+        # Vietnamese: no spell checking available
+        return spellcheck_vietnamese(text)
+    else:
+        # English: use LanguageTool (or Word COM as fallback)
+        return spellcheck_english_with_languagetool(text)
