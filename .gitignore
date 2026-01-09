@@ -1,0 +1,16 @@
+/venv
+/.env
+/corpus/
+/test/
+/.cache/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Test and coverage
+.pytest_cache/
+.coverage
+htmlcov/
