@@ -8,8 +8,6 @@ from typing import Any, Dict, Optional, List
 from docx import Document
 from dotenv import load_dotenv
 
-from utils.disk_cache import get_file_hash, save_to_cache, load_from_cache
-
 # Load env from root with override
 root_dir = Path(__file__).parent.parent
 load_dotenv(root_dir / ".env", override=True)
@@ -79,7 +77,6 @@ def check_plagiarism_in_file(
     use_fuzzy_match: bool = False,
     use_llm_verify: bool = False,
     parsed_paras: Optional[List] = None,
-    use_cache: bool = True,
 ) -> Dict[str, Any]:
     try:
         from pathlib import Path
@@ -90,14 +87,6 @@ def check_plagiarism_in_file(
         if not Path(file_path).exists():
             logger.error(f"Plagiarism check: file not found: {file_path}")
             return {"success": False, "error": "File not found"}
-        
-        # Check disk cache first
-        if use_cache:
-            file_hash = get_file_hash(file_path)
-            cached_result = load_from_cache(file_hash, namespace="plagiarism")
-            if cached_result is not None:
-                logger.debug(f"Sử dụng plagiarism cache cho {Path(file_path).name}")
-                return cached_result
         
         logger.info(f"Starting plagiarism check: {Path(file_path).name}")
         
@@ -125,9 +114,6 @@ def check_plagiarism_in_file(
                 "total_words": word_count,
                 "note": "PlagiarismSearch API not configured (missing API keys in .env)",
             }
-            # Cache the "API not available" result for 1 hour
-            if use_cache:
-                save_to_cache(file_hash, result, namespace="plagiarism", ttl=3600)
             return result
 
         _require_creds()
@@ -144,10 +130,6 @@ def check_plagiarism_in_file(
 
         # Ensure total_words uses full document word count
         result["total_words"] = word_count
-        
-        # Save to disk cache
-        if use_cache and result.get("success"):
-            save_to_cache(file_hash, result, namespace="plagiarism", ttl=7*24*3600)  # 7 days
         
         return result
 
