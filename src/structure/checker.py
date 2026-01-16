@@ -400,8 +400,6 @@ def _detect_titles(front_lines: List[str]) -> Tuple[Optional[str], Optional[str]
             if (not _VI_DIACRITICS.search(s)) and _english_ratio(s) >= 0.80 and len(s.split()) >= 4:
                 title_en = s
                 continue
-
-        return title_vi, title_en
         
     # Small merge for wrapped titles (2 lines)
     def _maybe_merge_wrapped(title: Optional[str]) -> Optional[str]:
