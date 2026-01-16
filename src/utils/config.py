@@ -27,7 +27,7 @@ CREATE_URL = f"{BASE_URL}/reports/create"
 DEFAULT_TIMEOUT_SECONDS = 900
 DEFAULT_RETRY_DELAY = 2
 MAX_RETRIES = 5
-REPORT_POLL_INTERVAL = 2
+REPORT_POLL_INTERVAL = 10
 
 # Chunking configuration
 DEFAULT_CHUNK_WORDS = 900
@@ -52,7 +52,7 @@ DYNAMIC_CHUNK_XLARGE_OVERLAP = 150
 
 # API submission limits
 MAX_WORDS_PER_SUBMISSION = 5000           # PlagiarismSearch API limit
-MAX_PARALLEL_CHECKS = 3                   # Max concurrent plagiarism checks
+MAX_PARALLEL_CHECKS = 2                   # Max concurrent plagiarism checks
 
 # Plagiarism API payload defaults
 DEFAULT_CREATE_PAYLOAD = {

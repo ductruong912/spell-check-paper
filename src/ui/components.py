@@ -1,6 +1,8 @@
 import html
 from typing import List, Dict
 
+"""Các tiện ích UI nhỏ: tạo HTML highlight cho các lỗi trong văn bản."""
+
 def highlight_html(text: str, issues: List[Dict]) -> str:
     if not text:
         return ""
@@ -32,7 +34,7 @@ def highlight_html(text: str, issues: List[Dict]) -> str:
     if not spans:
         return "<pre style='white-space:pre-wrap; font-family:inherit'>" + html.escape(safe_text) + "</pre>"
 
-    # Sort by start; if overlap, keep earliest and skip later overlap (simple + stable)
+    # Sắp theo start; nếu chồng chéo, giữ phần sớm nhất và bỏ phần sau
     spans.sort(key=lambda x: (x["start"], -(x["end"] - x["start"])))
 
     merged = []
@@ -44,7 +46,7 @@ def highlight_html(text: str, issues: List[Dict]) -> str:
         merged.append(s)
         last_end = s["end"]
 
-    # Color map (you can change to match UI theme)
+    # Color map
     bg_map = {
         "red": "#ff4d4f",
         "yellow": "#fadb14",

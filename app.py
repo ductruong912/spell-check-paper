@@ -1,12 +1,4 @@
-"""
-TNT CheckAI - Document Quality Checker
-Main Streamlit application for checking spelling, structure, and plagiarism.
-
-UI behavior:
-- Show DOCX context immediately after parsing (fast path).
-- Run spell / structure / plagiarism in parallel.
-- As each finishes, update its section immediately (no "wait for all").
-"""
+"""Ứng dụng Streamlit: kiểm tra chính tả, cấu trúc và đạo văn cho file DOCX."""
 from __future__ import annotations
 
 import html
@@ -44,6 +36,84 @@ SRC_DIR = BASE_DIR / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 # ─────────────────────────────────────────
+# Streamlit Page Config (MUST be called before any other st.*)
+# ─────────────────────────────────────────
+logo_path = BASE_DIR / "logo" / "logo_tringhia.jpg"
+st.set_page_config(
+    page_title="TNT Check AI",
+    page_icon=str(logo_path) if logo_path.exists() else None,
+    layout="wide",
+)
+
+# ─────────────────────────────────────────
+# Global CSS (Light/Dark adaptive)  ✅ FIX: metric text visible in both themes
+# ─────────────────────────────────────────
+st.markdown(
+    """
+    <style>
+      /* Metric card base */
+      .tnt-metric {
+        padding: 0.6rem 0.9rem;
+        border-radius: 14px;
+        border: 1px solid rgba(0,0,0,0.08);
+        background: rgba(255,255,255,0.65);
+        backdrop-filter: blur(6px);
+      }
+      .tnt-metric-title {
+        font-size: 0.85rem;
+        font-weight: 800;
+        margin-bottom: 0.25rem;
+        color: rgba(49,51,63,0.65); /* light default */
+      }
+      .tnt-metric-value {
+        font-size: 2.2rem;
+        font-weight: 900;
+        line-height: 1.0;
+        color: rgba(49,51,63,0.95); /* light default */
+      }
+
+      /* Accent label colors (safe on both themes) */
+      .tnt-accent-red { color: #ff4d4f !important; }
+      .tnt-accent-yellow { color: #d4b106 !important; } /* darker yellow for light theme */
+
+      /* Loading spinner */
+      .tnt-loading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(20,22,26,0.35);
+      }
+      .tnt-spin {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        border: 3px solid rgba(255,255,255,0.25);
+        border-top-color: #0099ff;
+        animation: tnt-rotate 0.8s linear infinite;
+      }
+      @keyframes tnt-rotate {
+        to { transform: rotate(360deg); }
+      }
+
+      /* Dark mode override */
+      @media (prefers-color-scheme: dark) {
+        .tnt-metric {
+          border: 1px solid rgba(255,255,255,0.12);
+          background: rgba(20,22,26,0.55);
+        }
+        .tnt-metric-title { color: rgba(255,255,255,0.72); }
+        .tnt-metric-value { color: rgba(255,255,255,0.95); }
+        .tnt-accent-yellow { color: #fadb14 !important; } /* bright yellow works on dark */
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ─────────────────────────────────────────
 # Module Imports
 # ─────────────────────────────────────────
 from utils.cache import DocumentCache
@@ -71,18 +141,31 @@ def _count_issue_types(issues: List[Dict]) -> Tuple[int, int, int]:
     return en, vi, other
 
 
+import re
+
+# Regex để phát hiện phần của email (vd: dieuanh.ln, tmu.edu)
+EMAIL_PART_RE = re.compile(r'^[a-z0-9._-]+$', re.I)
+
+
 def _decorate_issues_for_ui(issues: List[Dict]) -> List[Dict]:
     """Adds ui_color field used by highlight_html."""
     out: List[Dict] = []
     for it in (issues or []):
         t = (it.get("type") or "").strip()
+        word = (it.get("word") or it.get("text") or "").strip()
+        
+        # Skip các từ trông giống email (có dấu chấm và chỉ chứa ký tự email)
+        if '.' in word and EMAIL_PART_RE.match(word):
+            continue
+        
         it2 = dict(it)
         if t == "en_spelling":
             it2["ui_color"] = "red"
         elif t.startswith("vi_"):
             it2["ui_color"] = "yellow"
         else:
-            it2["ui_color"] = "gray"
+            # Bỏ qua các loại khác (không highlight)
+            continue
         out.append(it2)
     return out
 
@@ -92,33 +175,55 @@ def _is_spell_ok(spell_result: Dict) -> bool:
     return isinstance(spell_result, dict) and "issues" in spell_result
 
 
-def _badge(state: str) -> str:
-    """
-    state: idle|running|ok|error|timeout
-    """
-    if state == "ok":
-        return "✅"
-    if state == "running":
-        return "⏳"
-    if state == "timeout":
-        return "⏱️"
-    if state == "error":
-        return "❌"
-    return "•"
-
-
-def _render_status_bar(placeholders: Dict[str, st.delta_generator.DeltaGenerator], states: Dict[str, Dict]):
+def _render_status_bar(
+    placeholders: Dict[str, st.delta_generator.DeltaGenerator],
+    states: Dict[str, Dict],
+):
     """
     placeholders: {"doc": empty, "spell": empty, "structure": empty, "plagiarism": empty}
     states: {"doc": {"state": ..., "msg": ...}, ...}
     """
     for k, ph in placeholders.items():
         info = states.get(k, {"state": "idle", "msg": ""})
-        ph.markdown(f"**{_badge(info['state'])} {k.upper()}**  \n{info.get('msg','')}")
+        ph.markdown(f"**{k.upper()}**  \n{info.get('msg','')}")
 
 
-def _render_doc_and_spell(placeholder, *, file_name: str, text: str, word_count: int,
-                          issues: List[Dict], spell_error: str | None, is_spell_ready: bool):
+def _render_metric_card(title: str, value: str | int, accent: str | None = None) -> None:
+    """
+    Custom metric card (theme-adaptive).
+    accent: None | "red" | "yellow"
+    """
+    accent_class = ""
+    if accent == "red":
+        accent_class = "tnt-accent-red"
+    elif accent == "yellow":
+        accent_class = "tnt-accent-yellow"
+
+    st.markdown(
+        f"""
+        <div class="tnt-metric">
+          <div class="tnt-metric-title {accent_class}">
+            {html.escape(title)}
+          </div>
+          <div class="tnt-metric-value">
+            {html.escape(str(value))}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_doc_and_spell(
+    placeholder,
+    *,
+    file_name: str,
+    text: str,
+    word_count: int,
+    issues: List[Dict],
+    spell_error: str | None,
+    is_spell_ready: bool,
+):
     placeholder.empty()
     with placeholder.container():
         if not text:
@@ -130,27 +235,92 @@ def _render_doc_and_spell(placeholder, *, file_name: str, text: str, word_count:
         if spell_error:
             st.warning(f"**Kiểm tra chính tả lỗi:** {spell_error}")
 
-        # Metrics: show word_count as soon as we have it (from doc_cache),
-        # and spell metrics when spell is ready.
         en_count, vi_count, other_count = _count_issue_types(issues)
 
+        # ── metrics (aligned cards)
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.metric("Số từ", word_count)
+            _render_metric_card("Số từ", word_count)
         with c2:
-            st.metric("Lỗi chính tả (EN)", en_count if is_spell_ready else "—")
+            _render_metric_card(
+                "Lỗi chính tả (EN)",
+                en_count if is_spell_ready else "—",
+                accent="red",
+            )
         with c3:
-            st.metric("Nghi ngờ (VI)", vi_count if is_spell_ready else "—")
+            _render_metric_card(
+                "Nghi ngờ (VI)",
+                vi_count if is_spell_ready else "—",
+                accent="yellow",
+            )
 
-        if is_spell_ready and other_count > 0:
-            st.caption(f"Khác: {other_count} (unavailable/metadata)")
 
         # Fast preview first, then upgrade to highlighted HTML when spell is ready
         if is_spell_ready:
             issues_for_ui = _decorate_issues_for_ui(issues)
             html_out = highlight_html(text, issues_for_ui)
+
+            iframe_css = """
+            <style>
+            html, body { margin:0; padding:0; }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+                font-size: 16px;
+                line-height: 1.55;
+            }
+
+            /* wrapper */
+            .tnt-doc {
+                padding: 14px 16px;
+                max-height: 800px;
+                overflow: auto;
+                border-radius: 12px;
+            }
+
+            /* Make sure highlight spans don't inherit weird defaults */
+            .tnt-doc span { color: inherit; }
+
+            /* Light mode */
+            @media (prefers-color-scheme: light) {
+                body { background: #ffffff; color: #111827; }
+                .tnt-doc { background: #ffffff; }
+            }
+
+            /* Dark mode */
+            @media (prefers-color-scheme: dark) {
+                body { background: #0e1117; color: rgba(255,255,255,0.92); }
+                .tnt-doc { background: #0e1117; }
+            }
+            /* Simple spinner loader */
+            .tnt-loading {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(20,22,26,0.35);
+            }
+
+            .tnt-spin {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 3px solid rgba(255,255,255,0.25);
+            border-top-color: rgba(255,255,255,0.9);
+            animation: tnt-rotate 0.8s linear infinite;
+            }
+
+            @keyframes tnt-rotate {
+            to { transform: rotate(360deg); }
+            }
+
+            </style>
+            """
+
             st.components.v1.html(
-                f"<div style='max-height:800px;overflow:auto'>{html_out}</div>",
+                f"<!doctype html><html><head>{iframe_css}</head>"
+                f"<body><div class='tnt-doc'>{html_out}</div></body></html>",
                 height=820,
             )
         else:
@@ -165,25 +335,43 @@ def _render_doc_and_spell(placeholder, *, file_name: str, text: str, word_count:
 def _render_plagiarism(placeholder, *, data: Dict, state: str, error: str | None):
     placeholder.empty()
     with placeholder.container():
+        st.subheader("Kiểm tra đạo văn")
         if state == "running":
-            st.info("Đang kiểm tra đạo văn…")
-            st.caption("Kết quả sẽ hiện ngay khi xong.")
+            st.markdown(
+                """
+                <div class="tnt-loading">
+                  <div class="tnt-spin"></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         elif state in ("error", "timeout") and not data:
             st.error(error or "Không lấy được kết quả đạo văn.")
-        else:
+        elif state == "ok":
             render_plagiarism_section(data or {})
+        else:
+            st.caption("Chưa có kết quả.")
 
 
 def _render_structure(placeholder, *, data: Dict, state: str, error: str | None):
     placeholder.empty()
     with placeholder.container():
+        st.subheader("Cấu trúc bài báo")
         if state == "running":
-            st.info("Đang kiểm tra cấu trúc…")
-            st.caption("Kết quả sẽ hiện ngay khi xong.")
+            st.markdown(
+                """
+                <div class="tnt-loading">
+                  <div class="tnt-spin"></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         elif state in ("error", "timeout") and not data:
             st.error(error or "Không lấy được kết quả cấu trúc.")
-        else:
+        elif state == "ok":
             render_structure_section(data or {})
+        else:
+            st.caption("Chưa có kết quả.")
 
 
 def _cleanup_old_tmp_files(ttl_seconds: int = 2 * 60 * 60) -> None:
@@ -205,7 +393,6 @@ def _cleanup_old_tmp_files(ttl_seconds: int = 2 * 60 * 60) -> None:
                     os.remove(p)
                 else:
                     kept.append(p)
-            # if already removed, drop it
         except Exception:
             kept.append(p)
     st.session_state["_tmp_garbage"] = kept
@@ -224,21 +411,13 @@ def _reset_results_state() -> None:
 
 
 # ─────────────────────────────────────────
-# Streamlit UI Configuration
+# Streamlit UI
 # ─────────────────────────────────────────
-SHOW_STATUS_BAR = False  # set True if you want the top status bar back
-
-# ─────────────────────────────────────────
-# Streamlit UI Configuration
-# ─────────────────────────────────────────
-# Logo path (dùng cho page_icon và header nếu tồn tại)
-logo_path = Path(__file__).parent / "logo" / "logo_tringhia.jpg"
-st.set_page_config(page_title="TNT Check AI", layout="wide")
-st.set_page_config(page_title="TNT Check AI", page_icon=str(logo_path) if logo_path.exists() else None, layout="wide")
 st.title("TNT Check AI")
 
-
 _cleanup_old_tmp_files()
+
+SHOW_STATUS_BAR = False  # set True if you want the top status bar back
 
 # ─────────────────────────────────────────
 # Sidebar - File Upload
@@ -261,6 +440,7 @@ st.session_state.setdefault("text", "")
 st.session_state.setdefault("issues", [])
 st.session_state.setdefault("word_count", 0)
 st.session_state.setdefault("file_name", "")
+st.session_state.setdefault("file_size", 0)  # Track file size to detect changes
 st.session_state.setdefault("structure", {})
 st.session_state.setdefault("plagiarism", {})
 st.session_state.setdefault("spell_check_error", None)
@@ -319,9 +499,16 @@ _render_structure(
 # Main Workflow - progressive results
 # ─────────────────────────────────────────
 if f and run_check:
+    # Get current file info
+    f.seek(0)
+    current_file_content = f.read()
+    current_file_size = len(current_file_content)
+    f.seek(0)  # Reset for later use
+    
+    # Always reset results when checking
     _reset_results_state()
+    st.session_state.file_size = current_file_size
 
-    # Initial status
     status_states = {
         "doc": {"state": "running", "msg": "Đang đọc DOCX…"},
         "spell": {"state": "idle", "msg": ""},
@@ -329,21 +516,22 @@ if f and run_check:
         "plagiarism": {"state": "idle", "msg": ""},
     }
     if SHOW_STATUS_BAR:
-            _render_status_bar(
+        _render_status_bar(
             {"doc": st_doc, "spell": st_spell, "structure": st_struct, "plagiarism": st_plag},
-        status_states,
-    )
+            status_states,
+        )
 
-    logger.info("Starting checks on file: %s", f.name)
+    logger.info("Starting checks on file: %s (size: %d bytes)", f.name, current_file_size)
 
     suffix = "." + f.name.split(".")[-1]
     tmp_path = None
     any_timeout = False
+    ex: ThreadPoolExecutor | None = None
 
     try:
         # Save upload to a temp file once
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(f.read())
+            tmp.write(current_file_content)
             tmp_path = tmp.name
 
         # 1) Parse DOCX (fast) and show context immediately
@@ -359,11 +547,12 @@ if f and run_check:
         status_states["spell"] = {"state": "running", "msg": "Đang kiểm tra…"}
         status_states["structure"] = {"state": "running", "msg": "Đang kiểm tra…"}
         status_states["plagiarism"] = {"state": "running", "msg": "Đang kiểm tra…"}
+
         if SHOW_STATUS_BAR:
-                _render_status_bar(
+            _render_status_bar(
                 {"doc": st_doc, "spell": st_spell, "structure": st_struct, "plagiarism": st_plag},
-            status_states,
-        )
+                status_states,
+            )
 
         # Render doc right after parsing (no highlight yet)
         _render_doc_and_spell(
@@ -393,9 +582,8 @@ if f and run_check:
         pending = set(rev.keys())
         finished: set[str] = set()
 
-
         while pending:
-            done, pending = wait(pending, timeout=0.2, return_when=FIRST_COMPLETED)
+            done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
 
             # timeout guard
             now = time.monotonic()
@@ -405,17 +593,26 @@ if f and run_check:
                 if (now - starts[name]) > timeouts[name]:
                     any_timeout = True
                     finished.add(name)
-                    # best effort cancel (won't stop if already running)
                     try:
                         fut.cancel()
                     except Exception:
                         pass
 
                     if name == "structure":
-                        st.session_state.structure = {"ok": False, "sections": {}, "notes": [], "error": "Quá thời gian xử lý (>120s)"}
+                        st.session_state.structure = {
+                            "ok": False,
+                            "sections": {},
+                            "notes": [],
+                            "error": "Quá thời gian xử lý (>120s)",
+                        }
                         st.session_state.structure_check_error = "Quá thời gian xử lý (>120s)"
                         status_states["structure"] = {"state": "timeout", "msg": "Timeout >120s"}
-                        _render_structure(structure_placeholder, data=st.session_state.structure, state="timeout", error=st.session_state.structure_check_error)
+                        _render_structure(
+                            structure_placeholder,
+                            data=st.session_state.structure,
+                            state="timeout",
+                            error=st.session_state.structure_check_error,
+                        )
 
                     elif name == "spell":
                         st.session_state.issues = []
@@ -428,20 +625,30 @@ if f and run_check:
                             word_count=st.session_state.word_count,
                             issues=st.session_state.issues,
                             spell_error=st.session_state.spell_check_error,
-                            is_spell_ready=True,  # show metrics as error state
+                            is_spell_ready=True,
                         )
 
                     elif name == "plagiarism":
-                        st.session_state.plagiarism = {"success": False, "overall_score": 0.0, "findings": [], "error": "Quá thời gian xử lý (>900s)"}
+                        st.session_state.plagiarism = {
+                            "success": False,
+                            "overall_score": 0.0,
+                            "findings": [],
+                            "error": "Quá thời gian xử lý (>900s)",
+                        }
                         st.session_state.plagiarism_check_error = "Quá thời gian xử lý (>900s)"
                         status_states["plagiarism"] = {"state": "timeout", "msg": "Timeout >900s"}
-                        _render_plagiarism(plagiarism_placeholder, data=st.session_state.plagiarism, state="timeout", error=st.session_state.plagiarism_check_error)
+                        _render_plagiarism(
+                            plagiarism_placeholder,
+                            data=st.session_state.plagiarism,
+                            state="timeout",
+                            error=st.session_state.plagiarism_check_error,
+                        )
 
                     if SHOW_STATUS_BAR:
-                            _render_status_bar(
+                        _render_status_bar(
                             {"doc": st_doc, "spell": st_spell, "structure": st_struct, "plagiarism": st_plag},
-                        status_states,
-                    )
+                            status_states,
+                        )
 
             # handle completed futures
             for fut in done:
@@ -485,7 +692,11 @@ if f and run_check:
                 else:
                     if name == "structure":
                         st.session_state.structure = res or {}
-                        st.session_state.structure_check_error = st.session_state.structure.get("error") if not st.session_state.structure.get("ok", False) else None
+                        st.session_state.structure_check_error = (
+                            st.session_state.structure.get("error")
+                            if not st.session_state.structure.get("ok", False)
+                            else None
+                        )
                         status_states["structure"] = {"state": "ok", "msg": f"Xong ({elapsed:.1f}s)"}
                         _render_structure(structure_placeholder, data=st.session_state.structure, state="ok", error=st.session_state.structure_check_error)
 
@@ -494,7 +705,6 @@ if f and run_check:
                         spell_error = (res.get("error") if isinstance(res, dict) else "Unknown error") if not spell_ok else None
                         st.session_state.spell_check_error = spell_error
                         st.session_state.issues = (res.get("issues", []) if isinstance(res, dict) else []) or []
-                        # prefer spell_result total_words if present; fallback to doc_cache.word_count
                         st.session_state.word_count = int((res.get("total_words", 0) if isinstance(res, dict) else 0) or st.session_state.word_count)
 
                         status_states["spell"] = {"state": "ok" if spell_error is None else "error", "msg": f"Xong ({elapsed:.1f}s)"}
@@ -510,16 +720,20 @@ if f and run_check:
 
                     elif name == "plagiarism":
                         st.session_state.plagiarism = res or {}
-                        st.session_state.plagiarism_check_error = st.session_state.plagiarism.get("error") if not st.session_state.plagiarism.get("success", False) else None
+                        st.session_state.plagiarism_check_error = (
+                            st.session_state.plagiarism.get("error")
+                            if not st.session_state.plagiarism.get("success", False)
+                            else None
+                        )
                         status_states["plagiarism"] = {"state": "ok", "msg": f"Xong ({elapsed:.1f}s)"}
                         _render_plagiarism(plagiarism_placeholder, data=st.session_state.plagiarism, state="ok", error=st.session_state.plagiarism_check_error)
 
                 finished.add(name)
                 if SHOW_STATUS_BAR:
-                        _render_status_bar(
+                    _render_status_bar(
                         {"doc": st_doc, "spell": st_spell, "structure": st_struct, "plagiarism": st_plag},
-                    status_states,
-                )
+                        status_states,
+                    )
 
         en_count, vi_count, _ = _count_issue_types(st.session_state.issues)
         logger.info("Hoàn tất kiểm tra: EN=%s, VI_suspects=%s, tổng từ=%s", en_count, vi_count, st.session_state.word_count)
@@ -529,10 +743,10 @@ if f and run_check:
         st.error(f"Lỗi: {str(e)}")
         status_states["doc"] = {"state": "error", "msg": "Lỗi khi xử lý"}
         if SHOW_STATUS_BAR:
-                _render_status_bar(
+            _render_status_bar(
                 {"doc": st_doc, "spell": st_spell, "structure": st_struct, "plagiarism": st_plag},
-            status_states,
-        )
+                status_states,
+            )
     finally:
         # IMPORTANT:
         # - If any task timed out, the worker thread might still be running and may still need tmp_path.
@@ -548,8 +762,9 @@ if f and run_check:
                 except Exception as e:
                     logger.warning("Không thể xóa file tạm %s: %s", tmp_path, e)
 
-        # Don't block the UI waiting for threads (some may already be finished).
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)  # type: ignore[name-defined]
-        except Exception:
-            pass
+        # Don't block the UI waiting for threads
+        if ex is not None:
+            try:
+                ex.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass

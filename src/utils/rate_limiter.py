@@ -1,4 +1,4 @@
-"""Rate limiting and retry logic for API calls."""
+"""Hạn chế tần suất và retry cho các gọi API."""
 import time
 import logging
 from functools import wraps
@@ -9,27 +9,16 @@ logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    """Simple rate limiter using sliding window."""
-    
+    """Bộ hạn chế tần suất đơn giản dùng cửa sổ trượt."""
+
     def __init__(self, max_calls: int, time_window: int = 60):
-        """
-        Initialize rate limiter.
-        
-        Args:
-            max_calls: Maximum number of calls allowed in time window
-            time_window: Time window in seconds (default: 60s)
-        """
+        """Khởi tạo rate limiter: `max_calls` trong `time_window` giây."""
         self.max_calls = max_calls
         self.time_window = time_window
         self.call_times = deque()
     
     def is_allowed(self) -> tuple[bool, float]:
-        """
-        Check if a new call is allowed.
-        
-        Returns:
-            (is_allowed, wait_time_seconds)
-        """
+        """Trả về (cho phép, thời_giờ_chờ_s) cho lần gọi tiếp theo."""
         now = time.time()
         
         # Remove calls outside the time window
@@ -45,17 +34,17 @@ class RateLimiter:
         return False, max(0, wait_time)
     
     def add_call(self):
-        """Record a new API call."""
+        """Ghi nhận một lần gọi API mới."""
         self.call_times.append(time.time())
     
     def reset(self):
-        """Reset the rate limiter."""
+        """Đặt lại bộ đếm rate limiter."""
         self.call_times.clear()
 
 
 # Global rate limiters for different APIs
-openai_limiter = RateLimiter(max_calls=50, time_window=60)  # 50 calls/minute
-plagiarism_limiter = RateLimiter(max_calls=30, time_window=60)  # 30 calls/minute
+openai_limiter = RateLimiter(max_calls=200, time_window=60)  # 200 calls/minute
+plagiarism_limiter = RateLimiter(max_calls=200, time_window=60)  # 200 calls/minute
 
 
 def rate_limit(limiter: RateLimiter):
@@ -90,14 +79,9 @@ def retry_with_backoff(
     max_delay: float = 60.0,
     exponential_base: float = 2.0
 ):
-    """
-    Decorator to retry function with exponential backoff on rate limit errors.
-    
-    Args:
-        max_retries: Maximum number of retry attempts
-        initial_delay: Initial delay in seconds
-        max_delay: Maximum delay in seconds
-        exponential_base: Base for exponential backoff
+    """Decorator retry với backoff mũ cho lỗi rate-limit.
+
+    Tham số: `max_retries`, `initial_delay`, `max_delay`, `exponential_base`.
     """
     def decorator(func: Callable) -> Callable:
         @wraps(func)
@@ -111,13 +95,26 @@ def retry_with_backoff(
                     last_exception = e
                     error_str = str(e).lower()
                     
-                    # Check if it's a rate limit error
+                    # Check if it's a rate limit error. Be careful about negations
                     is_rate_limit = (
                         "429" in error_str or 
                         "rate limit" in error_str or 
                         "quota" in error_str or
                         isinstance(e, RateLimitError)
                     )
+
+                    # Avoid false positives like "not a rate limit" or "no rate limit"
+                    negations = [
+                        "not a rate limit",
+                        "not rate limit",
+                        "no rate limit",
+                        "not a rate-limit",
+                        "not a rate limit error",
+                        "is not a rate limit",
+                        "isn't a rate limit",
+                    ]
+                    if any(neg in error_str for neg in negations):
+                        is_rate_limit = False
                     
                     if not is_rate_limit or attempt == max_retries:
                         # Not a rate limit error or final attempt, raise it

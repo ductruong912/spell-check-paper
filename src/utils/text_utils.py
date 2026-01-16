@@ -1,14 +1,14 @@
-"""Text processing utility functions."""
+"""Hàm tiện ích xử lý văn bản."""
 import re
 
 
 def normalize_text(text: str) -> str:
-    """Normalize whitespace in text."""
+    """Chuẩn hóa khoảng trắng trong văn bản."""
     return " ".join(text.split())
 
 
 def norm_ws(s: str) -> str:
-    """Normalize whitespace for comparison."""
+    """Chuẩn khoảng trắng để so sánh."""
     return " ".join(s.strip().split())
 
 

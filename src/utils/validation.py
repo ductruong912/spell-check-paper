@@ -1,4 +1,4 @@
-"""API validation utilities and consistent error messages in Vietnamese."""
+"""Hàm xác thực API và thông báo lỗi thân thiện bằng tiếng Việt."""
 import os
 import logging
 from typing import Optional, Tuple
@@ -7,10 +7,10 @@ logger = logging.getLogger(__name__)
 
 
 class APIValidationError(Exception):
-    """Exception raised for API configuration errors."""
+    """Ngoại lệ cho lỗi cấu hình API (chứa message VI và EN)."""
     def __init__(self, message_vi: str, message_en: str):
-        self.message_vi = message_vi  # User-facing Vietnamese message
-        self.message_en = message_en  # Log message in English
+        self.message_vi = message_vi
+        self.message_en = message_en
         super().__init__(message_en)
 
 
@@ -52,7 +52,7 @@ def validate_plagiarism_api_credentials() -> Tuple[bool, Optional[str], Optional
         logger.error(f"PLAGIARISMSEARCH_API_USER has invalid email format: {api_user}")
         return False, None, None, "PLAGIARISMSEARCH_API_USER không đúng định dạng email"
     
-    # Basic length check for API_KEY
+    # Kiểm tra độ dài cơ bản của API_KEY
     if len(api_key) < 30:
         logger.error("PLAGIARISMSEARCH_API_KEY is too short (likely invalid)")
         return False, None, None, "PLAGIARISMSEARCH_API_KEY quá ngắn (không hợp lệ)"

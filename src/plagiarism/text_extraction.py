@@ -1,4 +1,4 @@
-"""Text extraction utilities for DOCX documents."""
+"""Hàm trích xuất văn bản từ tài liệu DOCX."""
 
 from __future__ import annotations
 from typing import List
@@ -8,7 +8,7 @@ from utils.text_utils import INTRO_HEADING, REF_HEADING
 
 
 def _docx_paragraph_texts(path: str) -> List[str]:
-    """Extract all non-empty paragraph texts from a DOCX file."""
+    """Trích xuất tất cả đoạn văn không rỗng từ DOCX."""
     doc = Document(path)
     out: List[str] = []
     for p in doc.paragraphs:
@@ -19,7 +19,7 @@ def _docx_paragraph_texts(path: str) -> List[str]:
 
 
 def extract_body_text_from_docx(path: str) -> str:
-    """Extract main body text from DOCX, between introduction and references."""
+    """Lấy phần thân chính giữa introduction và references."""
     paras = _docx_paragraph_texts(path)
     if not paras:
         return ""
@@ -56,7 +56,7 @@ def extract_body_text_from_docx(path: str) -> str:
 
 
 def extract_references_text_from_docx(path: str) -> str:
-    """Extract references/bibliography section from DOCX."""
+    """Lấy phần tài liệu tham khảo từ DOCX."""
     paras = _docx_paragraph_texts(path)
     if not paras:
         return ""

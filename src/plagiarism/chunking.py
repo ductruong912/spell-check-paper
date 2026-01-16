@@ -1,4 +1,4 @@
-"""Text chunking utilities for plagiarism detection."""
+"""Hàm chia đoạn văn phục vụ phát hiện đạo văn."""
 
 from __future__ import annotations
 
@@ -25,34 +25,34 @@ from .text_extraction import extract_body_text_from_docx, extract_references_tex
 
 @dataclass
 class TextChunk:
-    """Represents a chunk of text with metadata."""
+    """Mô tả một đoạn văn kèm metadata (label, văn bản, số từ)."""
     label: str
     text: str
     words: int
 
 
 def get_dynamic_chunk_config(total_words: int) -> Dict[str, int]:
-    """Calculate optimal chunk size based on document word count."""
+    """Tính cấu hình chunk tối ưu theo tổng số từ của tài liệu."""
     if total_words < DYNAMIC_CHUNK_SMALL_THRESHOLD:
-        # Small doc: < 2K words → use 1000-word chunks
+        # Small doc: <2K words: use 1000-word chunks
         return {
             "chunk_size": DYNAMIC_CHUNK_SMALL_SIZE,
             "overlap": DYNAMIC_CHUNK_SMALL_OVERLAP
         }
     elif total_words < DYNAMIC_CHUNK_MEDIUM_THRESHOLD:
-        # Medium doc: 2K-5K words → use 1200-word chunks
+        # Medium doc: 2K-5K words: use 1200-word chunks
         return {
             "chunk_size": DYNAMIC_CHUNK_MEDIUM_SIZE,
             "overlap": DYNAMIC_CHUNK_MEDIUM_OVERLAP
         }
     elif total_words < DYNAMIC_CHUNK_LARGE_THRESHOLD:
-        # Large doc: 5K-20K words → use 1500-word chunks
+        # Large doc: 5K-20K words: use 1500-word chunks
         return {
             "chunk_size": DYNAMIC_CHUNK_LARGE_SIZE,
             "overlap": DYNAMIC_CHUNK_LARGE_OVERLAP
         }
     else:
-        # Extra large: > 20K words → use 2000-word chunks
+        # Extra large: >20K words: use 2000-word chunks
         return {
             "chunk_size": DYNAMIC_CHUNK_XLARGE_SIZE,
             "overlap": DYNAMIC_CHUNK_XLARGE_OVERLAP
@@ -60,7 +60,7 @@ def get_dynamic_chunk_config(total_words: int) -> Dict[str, int]:
 
 
 def _chunk_words(text: str, target_words: int = DEFAULT_CHUNK_WORDS, overlap_words: int = DEFAULT_OVERLAP_WORDS) -> List[str]:
-    """Word-based chunking with overlap to reduce boundary loss."""
+    """Chia theo số từ với overlap để giảm mất ngữ cảnh ở biên."""
     words = (text or "").split()
     if not words:
         return []
@@ -92,7 +92,7 @@ def extract_body_chunks_from_docx(
     chunk_target_words: int = 900,
     chunk_overlap_words: int = 120,
 ) -> List[TextChunk]:
-    """Extract and chunk body text from DOCX file."""
+    """Trích xuất phần thân và chia thành chunks từ DOCX."""
     body = extract_body_text_from_docx(path)
     if not body.strip():
         return []
@@ -112,7 +112,7 @@ def extract_reference_chunks_from_docx(
     chunk_target_words: int = 1000,
     chunk_overlap_words: int = 100,
 ) -> List[TextChunk]:
-    """Extract and chunk references section from DOCX file."""
+    """Trích xuất phần references và chia thành chunks phù hợp."""
     refs_text = extract_references_text_from_docx(path)
     if not refs_text.strip():
         return []

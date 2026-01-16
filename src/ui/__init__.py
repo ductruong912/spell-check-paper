@@ -1,4 +1,4 @@
-"""UI components and handlers."""
+"""Các thành phần UI và trình xử lý (handlers)."""
 from .components import highlight_html
 from .handlers import check_structure, check_spell, check_plagiarism
 from .layout import render_plagiarism_section, render_structure_section
