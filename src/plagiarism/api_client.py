@@ -1,11 +1,11 @@
-"""PlagiarismSearch API client implementation."""
+"""Client PlagiarismSearch: gửi văn bản và lấy báo cáo đạo văn."""
 
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -22,8 +22,8 @@ from utils.rate_limiter import rate_limit, retry_with_backoff, plagiarism_limite
 logger = logging.getLogger("plagiarism_checker")
 
 
-def _require_creds() -> tuple[str, str]:
-    """Validate API credentials are available."""
+def _require_creds() -> Tuple[str, str]:
+    """Kiểm tra và trả về credentials PlagiarismSearch từ môi trường."""
     is_valid, api_user, api_key, error_msg = validate_plagiarism_api_credentials()
     if not is_valid:
         raise APIValidationError(error_msg, f"PlagiarismSearch API validation failed: {error_msg}")
@@ -32,14 +32,18 @@ def _require_creds() -> tuple[str, str]:
 
 @dataclass
 class CreateResult:
-    """Result from creating a plagiarism report."""
+    """Kết quả khi tạo báo cáo đạo văn (id và raw response)."""
     report_id: int
     raw: dict
 
 
 class PlagiarismSearchClient:
-    """Client for interacting with PlagiarismSearch API."""
-    
+    """Khách hàng tương tác với API PlagiarismSearch.
+
+    Lưu ý: requests.Session KHÔNG thread-safe.
+    Nếu chạy song song, hãy tạo 1 client/Session cho mỗi worker.
+    """
+
     def __init__(self, user: str, key: str, session: Optional[requests.Session] = None) -> None:
         self.auth = HTTPBasicAuth(user, key)
         self.sess = session or requests.Session()
@@ -47,17 +51,18 @@ class PlagiarismSearchClient:
     @rate_limit(plagiarism_limiter)
     @retry_with_backoff(max_retries=3, initial_delay=2.0)
     def create_report(self, text: str, remote_id: str, payload_extra: Optional[dict] = None) -> CreateResult:
-        """Create a new plagiarism report."""
-        # PHASE 2: Validate text length against API submission limit
+        """Tạo báo cáo đạo văn mới (gửi text tới API)."""
         word_count = len(text.split()) if text else 0
         if word_count > MAX_WORDS_PER_SUBMISSION:
             raise ValueError(
                 f"Text exceeds API limit: {word_count} words > {MAX_WORDS_PER_SUBMISSION} words. "
                 f"Consider reducing chunk size or splitting further."
             )
-        
+
         payload = dict(DEFAULT_CREATE_PAYLOAD)
-        payload.update(payload_extra or {})
+        if payload_extra:
+            payload.update(payload_extra)
+
         payload["text"] = text
         payload["remote_id"] = remote_id
 
@@ -83,8 +88,9 @@ class PlagiarismSearchClient:
 
         return CreateResult(report_id=int(report_id), raw=j)
 
+    @rate_limit(plagiarism_limiter)
+    @retry_with_backoff(max_retries=3, initial_delay=2.0)
     def get_report(self, report_id: int, show_relations: int = -2) -> dict:
-        """Retrieve a plagiarism report by ID."""
         url = f"{BASE_URL}/reports/{report_id}"
         params = {"show_relations": show_relations}
         r = self.sess.get(url, params=params, auth=self.auth, timeout=60)
@@ -98,9 +104,8 @@ class PlagiarismSearchClient:
         poll_s: float = 5.0,
         show_relations: int = -2,
     ) -> dict:
-        """Poll report until it's checked or timeout occurs."""
+        """Đợi đến khi báo cáo được xử lý xong hoặc timeout."""
         t0 = time.time()
-        last: Optional[dict] = None
         poll_count = 0
         last_status = None
         last_progress = None
@@ -113,12 +118,13 @@ class PlagiarismSearchClient:
             progress = data.get("progress")
             poll_count += 1
 
-            # Log only on status/progress change or every 10th poll (to show it's alive)
             status_changed = (status_label != last_status) or (progress != last_progress)
             if status_changed or poll_count % 10 == 0:
                 elapsed = int(time.time() - t0)
-                logger.info("POLL id=%s status=%s progress=%s (poll=%d, elapsed=%ds)", 
-                           report_id, status_label, progress, poll_count, elapsed)
+                logger.info(
+                    "POLL id=%s status=%s progress=%s (poll=%d, elapsed=%ds)",
+                    report_id, status_label, progress, poll_count, elapsed
+                )
                 last_status = status_label
                 last_progress = progress
 

@@ -1,25 +1,48 @@
-"""Main plagiarism checking functions with parallel processing."""
+"""Các hàm kiểm tra đạo văn chính, sử dụng xử lý song song."""
 
 from __future__ import annotations
 
+import re
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
-from utils.config import (
-    DEFAULT_CREATE_PAYLOAD,
-    MAX_PARALLEL_CHECKS,
-)
+from utils.config import DEFAULT_CREATE_PAYLOAD, MAX_PARALLEL_CHECKS
 from .api_client import PlagiarismSearchClient, _require_creds
-from .chunking import TextChunk, extract_body_chunks_from_docx, extract_reference_chunks_from_docx, get_dynamic_chunk_config
+from utils.config import REPORT_POLL_INTERVAL
+from .chunking import (
+    TextChunk,
+    extract_body_chunks_from_docx,
+    extract_reference_chunks_from_docx,
+    get_dynamic_chunk_config,
+)
 from .text_extraction import _docx_paragraph_texts
 
 logger = logging.getLogger("plagiarism_checker")
 
 
+# ─────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────
+
+def _short_api_error(msg: str) -> str:
+    if not msg:
+        return "Lỗi không xác định"
+    # Bỏ phần “Vui lòng đợi X giây …”
+    msg = re.sub(r"\.?\s*Vui lòng đợi\s*\d+\s*giây.*$", ".", msg, flags=re.IGNORECASE)
+    msg = re.sub(r"\.?\s*Please wait\s*\d+\s*seconds.*$", ".", msg, flags=re.IGNORECASE)
+    return msg.strip()
+
+def _safe_float(x: Any, default: float = 0.0) -> float:
+    try:
+        return float(x)
+    except Exception:
+        return default
+
+
 def _web_sources_count(sources: List[dict]) -> int:
-    """Count web sources from sources list."""
+    """Đếm số nguồn web trong danh sách sources."""
     c = 0
     for s in sources or []:
         tl = (s.get("type_label") or "").lower()
@@ -31,28 +54,62 @@ def _web_sources_count(sources: List[dict]) -> int:
 
 
 def _pick_top_source(sources: List[dict]) -> Optional[dict]:
-    """Pick the top source by plagiarism percentage."""
+    """Chọn nguồn có tỷ lệ trùng cao nhất."""
     if not sources:
         return None
 
     def keyf(x: dict) -> float:
-        try:
-            return float(x.get("plagiat") or x.get("plagiarism") or 0.0)
-        except Exception:
-            return 0.0
+        return _safe_float(x.get("plagiat") or x.get("plagiarism") or 0.0, 0.0)
 
     return max(sources, key=keyf)
 
 
+def _top_sources(sources: List[dict], k: int = 3) -> List[Dict[str, Any]]:
+    """Lấy top K sources theo score, chuẩn hoá cho UI."""
+    if not sources:
+        return []
+
+    def score(x: dict) -> float:
+        return _safe_float(x.get("plagiat") or x.get("plagiarism") or 0.0, 0.0)
+
+    ranked = sorted((sources or []), key=score, reverse=True)
+
+    out: List[Dict[str, Any]] = []
+    for s in ranked[:k]:
+        if not isinstance(s, dict):
+            continue
+        out.append(
+            {
+                "title": (s.get("title") or "").strip() or "(Không có tiêu đề)",
+                "url": (s.get("url") or "").strip(),  # URL GỐC -> không phụ thuộc login
+                "score": score(s),
+                "type_label": (s.get("type_label") or "").strip(),
+            }
+        )
+    return out
+
+
+# ─────────────────────────────────────────
+# Worker
+# ─────────────────────────────────────────
 def _process_single_chunk(
-    client: PlagiarismSearchClient,
+    api_user: str,
+    api_key: str,
     chunk: TextChunk,
     chunk_index: int,
     docx_basename: str,
     timeout_s: int,
     section_type: str = "BODY",
+    payload_extra: Optional[dict] = None,
 ) -> Dict[str, Any]:
-    """Process a single chunk in parallel and return finding dict."""
+    """Xử lý một chunk song song và trả về dict kết quả.
+
+    Quan trọng:
+    - Mỗi worker tự tạo client (requests.Session riêng) để thread-safe.
+    - payload_extra dùng để override filter (REF vs BODY).
+    """
+    client = PlagiarismSearchClient(api_user, api_key)
+
     try:
         remote_id = f"{docx_basename}#{section_type}#{chunk_index}"
         logger.debug(
@@ -62,22 +119,26 @@ def _process_single_chunk(
             remote_id,
         )
 
-        # Create report and wait for results
-        created = client.create_report(text=chunk.text, remote_id=remote_id)
-        data = client.wait_checked(
-            created.report_id, timeout_s=timeout_s, poll_s=5.0, show_relations=-2
-        )
+        created = client.create_report(text=chunk.text, remote_id=remote_id, payload_extra=payload_extra)
+        data = client.wait_checked(created.report_id, timeout_s=timeout_s, poll_s=REPORT_POLL_INTERVAL, show_relations=-2)
 
-        # Extract metrics
-        similarity = float(data.get("similarity") or 0.0)
-        checked_words = int(data.get("checked_words") or chunk.words)
+        similarity = _safe_float(data.get("similarity") or 0.0, 0.0)
+        try:
+            checked_words = int(data.get("checked_words") or chunk.words)
+        except Exception:
+            checked_words = chunk.words
+
         sources = data.get("sources") or []
         web_sources = _web_sources_count(sources)
         top = _pick_top_source(sources)
-        report_link = data.get("link")
-        top_url = (top or {}).get("url") or ""
+
+        report_link = (data.get("link") or "").strip()
+        top_url = (top or {}).get("url") or ""  # URL gốc
         top_title = (top or {}).get("title") or ""
-        top_score = float((top or {}).get("plagiat") or (top or {}).get("plagiarism") or 0.0)
+        top_score = _safe_float((top or {}).get("plagiat") or (top or {}).get("plagiarism") or 0.0, 0.0)
+
+        # NEW: top 3 sources
+        top_sources = _top_sources(sources, k=3)
 
         logger.info(
             "Chunk=%s similarity=%.2f%% checked_words=%s sources=%s (parallel)",
@@ -94,15 +155,23 @@ def _process_single_chunk(
             "checked_words": checked_words,
             "web_sources": web_sources,
             "sources_count": len(sources),
+
+            # backward compatible fields
             "top_source_title": top_title,
             "top_source_url": top_url,
             "top_source_score": top_score,
+
+            # recommended UI field
+            "top_sources": top_sources,
+
             "report_link": report_link,
             "text": (chunk.text[:500] + "...") if len(chunk.text) > 500 else chunk.text,
         }
+
     except Exception as e:
-        logger.error("Error processing chunk=%s: %s", chunk.label, str(e))
-        # Return error finding
+        raw = str(e)[:200]
+        short = _short_api_error(raw)
+        logger.error("Error processing chunk=%s: %s", chunk.label, raw)
         return {
             "chunk_index": chunk_index,
             "label": chunk.label,
@@ -110,14 +179,18 @@ def _process_single_chunk(
             "checked_words": chunk.words,
             "web_sources": 0,
             "sources_count": 0,
-            "top_source_title": f"ERROR: {str(e)[:100]}",
+            "top_source_title": f"ERROR: {short}",
             "top_source_url": "",
             "top_source_score": 0.0,
+            "top_sources": [],  # NEW: luôn có key để UI khỏi crash
             "report_link": "",
             "text": (chunk.text[:500] + "...") if len(chunk.text) > 500 else chunk.text,
         }
 
 
+# ─────────────────────────────────────────
+# Public APIs
+# ─────────────────────────────────────────
 def check_plagiarism_body_only(
     docx_path: str,
     chunk_target_words: int = 900,
@@ -126,23 +199,17 @@ def check_plagiarism_body_only(
     timeout_s: int = 600,
     use_dynamic_chunks: bool = True,
 ) -> Dict[str, Any]:
-    """Check plagiarism in document body with dynamic chunking and parallel processing."""
+    """Kiểm tra đạo văn phần thân bài, chia đoạn động và chạy song song."""
     api_user, api_key = _require_creds()
-    client = PlagiarismSearchClient(api_user, api_key)
 
     full_text = "\n".join(_docx_paragraph_texts(docx_path))
     total_words = len(full_text.split())
 
-    # PHASE 2: Use dynamic chunking if enabled (default ON)
     if use_dynamic_chunks:
         dynamic_config = get_dynamic_chunk_config(total_words)
         chunk_target_words = dynamic_config["chunk_size"]
         chunk_overlap_words = dynamic_config["overlap"]
-        logger.info(
-            "Using dynamic chunking: total_words=%s config=%s",
-            total_words,
-            dynamic_config,
-        )
+        logger.info("Using dynamic chunking: total_words=%s config=%s", total_words, dynamic_config)
 
     chunks = extract_body_chunks_from_docx(
         docx_path,
@@ -163,7 +230,6 @@ def check_plagiarism_body_only(
     total_checked_words = 0
     total_weighted_similarity = 0.0
 
-    # PHASE 2: Parallel chunk processing instead of sequential
     docx_basename = os.path.basename(docx_path)
     logger.info(
         "Starting parallel plagiarism check: %d chunks, %d workers, %d total words",
@@ -172,36 +238,33 @@ def check_plagiarism_body_only(
         total_words,
     )
 
+    body_payload = dict(DEFAULT_CREATE_PAYLOAD)
+
     try:
         with ThreadPoolExecutor(max_workers=MAX_PARALLEL_CHECKS) as executor:
-            # Submit all chunk tasks
             futures = {
                 executor.submit(
                     _process_single_chunk,
-                    client,
+                    api_user,
+                    api_key,
                     chunk,
                     i,
                     docx_basename,
                     timeout_s,
                     "BODY",
+                    body_payload,
                 ): i
                 for i, chunk in enumerate(chunks, start=1)
             }
 
-            # Collect results as they complete
             for future in as_completed(futures):
-                chunk_index = futures[future]
                 try:
                     finding = future.result()
                     findings.append(finding)
-                    total_checked_words += finding["checked_words"]
-                    total_weighted_similarity += (
-                        finding["similarity"] * finding["checked_words"]
-                    )
+                    total_checked_words += int(finding.get("checked_words") or 0)
+                    total_weighted_similarity += _safe_float(finding.get("similarity"), 0.0) * int(finding.get("checked_words") or 0)
                 except Exception as e:
-                    logger.error(
-                        "Worker error for chunk %d: %s", chunk_index, str(e)
-                    )
+                    logger.error("Worker error: %s", str(e))
 
     except Exception as e:
         logger.error("ThreadPoolExecutor error: %s", str(e))
@@ -214,24 +277,18 @@ def check_plagiarism_body_only(
             "error": str(e),
         }
 
-    # Sort findings by chunk_index for consistent output
-    findings.sort(key=lambda x: x["chunk_index"])
+    findings.sort(key=lambda x: x.get("chunk_index", 0))
 
-    overall_score = (
-        (total_weighted_similarity / total_checked_words / 100.0)
-        if total_checked_words
-        else 0.0
-    )
-
+    overall_score = (total_weighted_similarity / total_checked_words / 100.0) if total_checked_words else 0.0
     logger.info(
-        "Parallel plagiarism check complete: %d findings, overall_score=%.2f%%",
+        "Parallel plagiarism check complete: %d findings, overall=%.2f%%",
         len(findings),
-        overall_score,
+        overall_score * 100.0,
     )
 
     return {
         "success": True,
-        "overall_score": overall_score,
+        "overall_score": overall_score,  # 0..1
         "findings": findings,
         "total_chunks": len(chunks),
         "total_words": total_words,
@@ -248,16 +305,15 @@ def check_plagiarism_full(
     timeout_s: int = 600,
     use_dynamic_chunks: bool = True,
 ) -> Dict[str, Any]:
-    """Check plagiarism for both body and references with dynamic chunking and parallel processing."""
+    """Kiểm tra đạo văn cho thân bài và phần tham khảo, dùng chunk động và xử lý song song."""
     api_user, api_key = _require_creds()
-    client = PlagiarismSearchClient(api_user, api_key)
 
     full_text = "\n".join(_docx_paragraph_texts(docx_path))
     total_words = len(full_text.split())
 
     result: Dict[str, Any] = {
         "success": True,
-        "overall_score": 0.0,
+        "overall_score": 0.0,  # 0..1
         "body_findings": [],
         "reference_findings": [],
         "total_chunks": 0,
@@ -268,18 +324,15 @@ def check_plagiarism_full(
     total_checked_words = 0
     total_weighted_similarity = 0.0
 
-    # Check body content
+    docx_basename = os.path.basename(docx_path)
+
+    # BODY
     if check_body:
-        # PHASE 2: Use dynamic chunking if enabled (default ON)
         if use_dynamic_chunks:
             dynamic_config = get_dynamic_chunk_config(total_words)
             body_chunk_target_words = dynamic_config["chunk_size"]
             body_chunk_overlap_words = dynamic_config["overlap"]
-            logger.debug(
-                "Body: using dynamic chunking: total_words=%s config=%s",
-                total_words,
-                dynamic_config,
-            )
+            logger.debug("Body: using dynamic chunking: total_words=%s config=%s", total_words, dynamic_config)
 
         body_chunks = extract_body_chunks_from_docx(
             docx_path,
@@ -288,41 +341,34 @@ def check_plagiarism_full(
             chunk_overlap_words=body_chunk_overlap_words,
         )
 
-        body_findings: List[Dict[str, Any]] = []
-        docx_basename = os.path.basename(docx_path)
+        logger.info("Body: starting parallel check: %d chunks, %d workers", len(body_chunks), MAX_PARALLEL_CHECKS)
 
-        # PHASE 2: Parallel chunk processing for body
-        logger.info(
-            "Body: starting parallel check: %d chunks, %d workers",
-            len(body_chunks),
-            MAX_PARALLEL_CHECKS,
-        )
+        body_payload = dict(DEFAULT_CREATE_PAYLOAD)
+        body_findings: List[Dict[str, Any]] = []
 
         try:
             with ThreadPoolExecutor(max_workers=MAX_PARALLEL_CHECKS) as executor:
                 futures = {
                     executor.submit(
                         _process_single_chunk,
-                        client,
+                        api_user,
+                        api_key,
                         chunk,
                         i,
                         docx_basename,
                         timeout_s,
                         "BODY",
+                        body_payload,
                     ): i
                     for i, chunk in enumerate(body_chunks, start=1)
                 }
 
                 for future in as_completed(futures):
-                    try:
-                        finding = future.result()
-                        body_findings.append(finding)
-                        total_checked_words += finding["checked_words"]
-                        total_weighted_similarity += (
-                            finding["similarity"] * finding["checked_words"]
-                        )
-                    except Exception as e:
-                        logger.error("Body worker error: %s", str(e))
+                    finding = future.result()
+                    body_findings.append(finding)
+                    cw = int(finding.get("checked_words") or 0)
+                    total_checked_words += cw
+                    total_weighted_similarity += _safe_float(finding.get("similarity"), 0.0) * cw
 
         except Exception as e:
             logger.error("Body parallel executor error: %s", str(e))
@@ -330,71 +376,60 @@ def check_plagiarism_full(
             result["error"] = f"Body check error: {str(e)}"
             return result
 
-        body_findings.sort(key=lambda x: x["chunk_index"])
+        body_findings.sort(key=lambda x: x.get("chunk_index", 0))
         result["body_findings"] = body_findings
         result["total_chunks"] = len(body_chunks)
 
-    # Check references (WITHOUT filter_references to catch plagiarism in citations)
+    # REFERENCES
     if check_references:
         ref_chunks = extract_reference_chunks_from_docx(docx_path)
-        ref_findings: List[Dict[str, Any]] = []
+        logger.info("References: starting parallel check: %d chunks, %d workers", len(ref_chunks), MAX_PARALLEL_CHECKS)
 
-        # Use custom payload that doesn't filter references
         ref_payload = dict(DEFAULT_CREATE_PAYLOAD)
-        ref_payload["filter_references"] = 0  # Enable checking references
-        ref_payload["filter_quotes"] = 0  # Be strict on quotes too
+        ref_payload["filter_references"] = 0
+        ref_payload["filter_quotes"] = 0
 
-        # PHASE 2: Parallel processing for references too
-        logger.info(
-            "References: starting parallel check: %d chunks, %d workers",
-            len(ref_chunks),
-            MAX_PARALLEL_CHECKS,
-        )
+        ref_findings: List[Dict[str, Any]] = []
 
         try:
             with ThreadPoolExecutor(max_workers=MAX_PARALLEL_CHECKS) as executor:
-                futures = {}
-                for i, chunk in enumerate(ref_chunks, start=1):
-                    future = executor.submit(
+                futures = {
+                    executor.submit(
                         _process_single_chunk,
-                        client,
+                        api_user,
+                        api_key,
                         chunk,
                         i,
-                        os.path.basename(docx_path),
+                        docx_basename,
                         timeout_s,
                         "REF",
-                    )
-                    futures[future] = i
+                        ref_payload,
+                    ): i
+                    for i, chunk in enumerate(ref_chunks, start=1)
+                }
 
                 for future in as_completed(futures):
-                    try:
-                        finding = future.result()
-                        # Rename field to match reference context
-                        finding["chunk"] = finding.pop("label", "")
-                        ref_findings.append(finding)
-                    except Exception as e:
-                        logger.error("Reference worker error: %s", str(e))
+                    finding = future.result()
+                    finding["chunk"] = finding.pop("label", "")
+                    ref_findings.append(finding)
 
         except Exception as e:
             logger.error("Reference parallel executor error: %s", str(e))
-            # Don't fail entire result if references fail
             logger.warning("Reference check failed, continuing with body results")
 
-        ref_findings.sort(key=lambda x: x["chunk_index"])
+        ref_findings.sort(key=lambda x: x.get("chunk_index", 0))
         result["reference_findings"] = ref_findings
         result["reference_chunks"] = len(ref_chunks)
 
-    # Calculate overall score
+    # OVERALL
     if total_checked_words > 0:
-        result["overall_score"] = (
-            total_weighted_similarity / total_checked_words / 100.0
-        )
+        result["overall_score"] = total_weighted_similarity / total_checked_words / 100.0
 
     logger.info(
         "Full plagiarism check complete: body=%d chunks, ref=%d chunks, overall=%.2f%%",
         len(result["body_findings"]),
         len(result["reference_findings"]),
-        result["overall_score"],
+        result["overall_score"] * 100.0,
     )
 
     return result
