@@ -77,15 +77,15 @@ st.markdown(
       .tnt-accent-yellow { color: #d4b106 !important; } /* darker yellow for light theme */
 
       /* Loading spinner */
-      .tnt-loading {
-        display: flex;
+        .tnt-loading {
+        display: inline-flex;
         align-items: center;
-        gap: 10px;
-        padding: 10px 12px;
-        border-radius: 12px;
-        border: 1px solid rgba(255,255,255,0.12);
-        background: rgba(20,22,26,0.35);
-      }
+        gap: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        }
       .tnt-spin {
         width: 24px;
         height: 24px;
@@ -293,15 +293,14 @@ def _render_doc_and_spell(
             }
             /* Simple spinner loader */
             .tnt-loading {
-            display: flex;
+            display: inline-flex;
             align-items: center;
-            gap: 10px;
-            padding: 10px 12px;
-            border-radius: 12px;
-            border: 1px solid rgba(255,255,255,0.12);
-            background: rgba(20,22,26,0.35);
+            gap: 0;
+            padding: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
             }
-
             .tnt-spin {
             width: 18px;
             height: 18px;

@@ -75,7 +75,7 @@ HIGHLIGHT_ERROR_COLOR = "#ff5252"  # Red for English spelling errors from Word C
 HIGHLIGHT_ERROR_TEXT_COLOR = "#fff"
 
 # Structure checking
-DEFAULT_LLM_MODEL = "gpt-4o-mini"
+DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_MIN_CONFIDENCE = 0.70
 
 # Spell checking
@@ -89,3 +89,9 @@ REF_MIN_RUN_LENGTH = 6                     # Minimum run length for references
 SKIP_TITLECASE_PROPER_NOUNS = True         # Skip titlecase proper nouns
 SKIP_ALL_CAPS_WORDS = True                 # Skip all caps words
 SKIP_STOPWORDS = True                      # Skip stopwords
+
+# Structure checking (LLM view sizing)
+LLM_VIEW_MAX_SECTIONS = 40
+LLM_VIEW_MAX_SECTION_CHARS = 1800
+LLM_VIEW_MAX_FRONT_PARAS = 160
+LLM_VIEW_MAX_TAIL_PARAS = 260

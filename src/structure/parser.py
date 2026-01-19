@@ -1,7 +1,4 @@
 """Phân tích DOCX và trích xuất cấu trúc bài báo.
-
-Ghi chú: không phụ thuộc hoàn toàn vào style Heading của Word; vẫn dùng khi có
-nhưng bổ sung heuristics để phát hiện heading nếu tác giả không dùng style.
 """
 from __future__ import annotations
 
@@ -25,6 +22,14 @@ class DocPara:
 class DocSection:
     heading: str
     content: str
+
+
+@dataclass
+class LLMDocView:
+
+    view_text: str
+    tail_text: str
+    section_count: int
 
 
 # -----------------------------
@@ -95,47 +100,6 @@ def extract_docx_paragraphs(path: str) -> List[DocPara]:
         out.append(DocPara(text=t, style=style_name, heading_level=lvl))
 
     return out
-
-
-def split_by_heading1(paras: List[DocPara]) -> Tuple[str, List[DocSection]]:
-    """Tách phần frontmatter và các section theo Heading 1."""
-    front_buf: List[str] = []
-    sections: List[DocSection] = []
-
-    cur_heading: Optional[str] = None
-    cur_buf: List[str] = []
-    seen_h1 = False
-
-    def flush():
-        nonlocal cur_heading, cur_buf
-        if cur_heading is None:
-            return
-        content = _norm_ws("\n".join(cur_buf))
-        sections.append(DocSection(heading=cur_heading, content=content))
-        cur_heading = None
-        cur_buf = []
-
-    for p in paras:
-        if p.heading_level == 1:
-            seen_h1 = True
-            flush()
-            cur_heading = p.text
-            cur_buf = []
-            continue
-
-        if not seen_h1:
-            front_buf.append(p.text)
-        else:
-            if cur_heading is not None:
-                if p.heading_level >= 2:
-                    cur_buf.append(f"## {p.text}")  # nhúng H2/H3 vào nội dung
-                else:
-                    cur_buf.append(p.text)
-
-    flush()
-    return _norm_ws("\n".join(front_buf)), sections
-
-
 # -----------------------------
 # Hybrid splitting (recommended for product)
 # -----------------------------
@@ -160,8 +124,7 @@ _ANCHOR_RE = re.compile(
 )
 
 
-def _looks_like_heading(text: str) -> bool:
-    """Heuristic: phát hiện dòng heading ngay cả khi không dùng style Heading."""
+def _looks_like_heading(text: str, *, allow_weak: bool = True) -> bool:
     t = (text or "").strip()
     if not t:
         return False
@@ -173,6 +136,9 @@ def _looks_like_heading(text: str) -> bool:
     # Strong signals
     if _ANCHOR_RE.match(t) or _HEADING_LIKE_RE.match(t):
         return True
+
+    if not allow_weak:
+        return False
 
     # Weak signals: short line, low punctuation, high uppercase ratio
     words = t.split()
@@ -189,11 +155,6 @@ def _looks_like_heading(text: str) -> bool:
 
 
 def split_by_structure(paras: List[DocPara]) -> Tuple[str, List[DocSection]]:
-    """Tách frontmatter và sections bằng ranh giới hybrid.
-
-    Ranh giới: Heading 1 hoặc dòng trông giống heading (heuristic).
-    Giúp hoạt động ổn định khi tác giả không dùng đúng style.
-    """
     front_buf: List[str] = []
     sections: List[DocSection] = []
 
@@ -211,7 +172,8 @@ def split_by_structure(paras: List[DocPara]) -> Tuple[str, List[DocSection]]:
         cur_buf = []
 
     for p in paras:
-        is_boundary = (p.heading_level == 1) or _looks_like_heading(p.text)
+        # (Heading 1 / anchor / đánh số). Tránh cắt nhầm tiêu đề IN HOA.
+        is_boundary = (p.heading_level == 1) or _looks_like_heading(p.text, allow_weak=seen_boundary)
 
         if is_boundary:
             seen_boundary = True
@@ -232,3 +194,61 @@ def split_by_structure(paras: List[DocPara]) -> Tuple[str, List[DocSection]]:
 
     flush()
     return _norm_ws("\n".join(front_buf)), sections
+
+
+# -----------------------------
+# LLM view builder (new)
+# -----------------------------
+def build_llm_view(
+    paras: List[DocPara],
+    *,
+    max_front_paras: int = 140,
+    max_tail_paras: int = 220,
+    max_sections: int = 28,
+    max_section_chars: int = 1200,
+) -> LLMDocView:
+    if not paras:
+        return LLMDocView(view_text="", tail_text="", section_count=0)
+
+    # FRONT/TAIL by paragraph windows.
+    n = len(paras)
+    if n <= (max_front_paras + max_tail_paras):
+        front_end = min(max_front_paras, max(1, n // 2))
+    else:
+        front_end = min(n, max_front_paras)
+
+    # Tail luôn ưu tiên lấy phần cuối. Nếu tài liệu ngắn, tail_start=front_end (không trùng).
+    tail_start = max(front_end, n - max(1, max_tail_paras))
+
+    front_text = _norm_ws("\n".join(p.text for p in paras[:front_end]))
+    tail_text = _norm_ws("\n".join(p.text for p in paras[tail_start:]))
+
+    # OUTLINE by hybrid split (helps the model infer missing headings)
+    _front_unused, sections = split_by_structure(paras)
+    outline_lines: List[str] = []
+    for i, sec in enumerate(sections[: max(1, max_sections)]):
+        heading = _norm_ws(sec.heading)
+        content = _norm_ws(sec.content)[: max(1, max_section_chars)]
+        if not heading and not content:
+            continue
+        outline_lines.append(f"[S{i:02d}] {heading}")
+        if content:
+            outline_lines.append(content)
+        outline_lines.append("")
+
+    outline_text = _norm_ws("\n".join(outline_lines))
+
+    view_text = _norm_ws(
+        "\n\n".join(
+            [
+                "[FRONT]",
+                front_text,
+                "[OUTLINE]",
+                outline_text,
+                "[TAIL]",
+                tail_text,
+            ]
+        )
+    )
+
+    return LLMDocView(view_text=view_text, tail_text=tail_text, section_count=min(len(sections), max_sections))
