@@ -42,7 +42,9 @@ VIETNAMESE_CHARS = (
 )
 
 # Vietnamese words (letters only) - for heuristic scan
-VI_WORD_RE = re.compile(r"[A-Za-z" + re.escape(VIETNAMESE_CHARS) + r"]+")
+# Now matches tone marks ASCII (backtick, tilde, question, apostrophe) mixed in
+# EXCLUDES period (.) as it's a sentence punctuation, not a tone mark error
+VI_WORD_RE = re.compile(r"[A-Za-z" + re.escape(VIETNAMESE_CHARS) + r"]+(?:[`~?']*[A-Za-z" + re.escape(VIETNAMESE_CHARS) + r"]*)*[`~?']*")
 
 # Unicode-aware token regex (prevents partial matches inside Vietnamese diacritics words)
 WORD_RE = re.compile(
@@ -258,7 +260,9 @@ def _has_vi_chars(s: str) -> bool:
 
 
 def _has_mixed_tone_marks(word: str) -> bool:
-    ascii_tones = set("`~?.'")
+    """Check for ASCII tone marks (backtick, tilde, question, apostrophe).
+    Excludes period (.) which is normal sentence punctuation."""
+    ascii_tones = set("`~?'")
     return any(c in ascii_tones for c in word)
 
 
@@ -289,6 +293,58 @@ def _has_repeated_run(word: str, run: int = 3) -> bool:
         return False
     w = word.lower()
     return bool(re.search(r"(.)\1{" + str(run - 1) + r",}", w))
+
+
+def _is_nonsense_combination(word: str) -> bool:
+    """
+    Detect nonsense character combinations that likely don't exist in any language:
+    - All same character repeated: 'aaa', 'iii', 'ooo'
+    - Only consonants: 'bcdfg', 'qwrt', 'xyz'
+    - Mostly same vowel with rare structure: 'iiia', 'aaab'
+    - Vowel-consonant-vowel pattern with all same vowels: 'iai', 'eae'
+    """
+    if not word or len(word) < 2:
+        return False
+    
+    w = word.lower()
+    
+    # Remove Vietnamese diacritics for this check
+    w_base = _strip_diacritics(w)
+    
+    # Skip if very short
+    if len(w_base) < 2:
+        return False
+    
+    # All same character (aaa, iii, ooo, etc.)
+    if len(set(w_base)) == 1:
+        return True
+    
+    vowels = set("aeiouy")
+    consonants = set("bcdfghjklmnpqrstvwxz")
+    
+    # Only consonants (no vowels): 'bcdfg', 'xyz', 'qwrt'
+    if all(c in consonants for c in w_base):
+        return True
+    
+    # Detect patterns like 'iiia', 'aaab', 'ooox' (mostly repeated vowel + 1 consonant)
+    if len(w_base) >= 3:
+        char_counts = {}
+        for c in w_base:
+            char_counts[c] = char_counts.get(c, 0) + 1
+        
+        # If one character dominates >= 70% and it's a vowel
+        max_char = max(char_counts, key=char_counts.get)
+        max_count = char_counts[max_char]
+        
+        if max_char in vowels and max_count >= len(w_base) * 0.7:
+            # Check that the rest are only 1-2 different characters
+            other_chars = [c for c in char_counts if c != max_char]
+            if len(other_chars) <= 2:
+                # And those other chars shouldn't repeat much
+                if all(char_counts[c] <= 2 for c in other_chars):
+                    return True
+    
+    return False
 
 
 def _is_hyphenation_fragment(text: str, start: int, end: int) -> bool:
@@ -670,6 +726,27 @@ def spellcheck_vietnamese(
                     original=word,
                     suggestions=[],
                     message="Nghi ngờ lỗi OCR/PDF: ký tự lặp nhiều lần trong từ",
+                )
+            )
+            issue_id += 1
+            continue
+
+        if _is_nonsense_combination(word):
+            # Skip if this word is part of an email or URL
+            if EMAIL_RE.search(text[max(0, start - 50):end + 50]) or \
+               URL_RE.search(text[max(0, start - 50):end + 50]) or \
+               DOMAIN_RE.search(text[max(0, start - 50):end + 50]):
+                continue
+            
+            issues.append(
+                Issue(
+                    id=str(issue_id),
+                    type="vi_nonsense_combination",
+                    offset=start,
+                    length=len(word),
+                    original=word,
+                    suggestions=[],
+                    message="Nghi ngờ tổ hợp ký tự lạ/không tồn tại (ví dụ 'iiia', 'bcdfg', 'aaa')",
                 )
             )
             issue_id += 1
