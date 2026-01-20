@@ -1,4 +1,4 @@
-"""Các hàm kiểm tra đạo văn chính, sử dụng xử lý song song."""
+"""Các hàm check đạo văn chính (chunk + chạy song song)."""
 
 from __future__ import annotations
 
@@ -25,14 +25,14 @@ logger = logging.getLogger("plagiarism_checker")
 # ─────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────
-
 def _short_api_error(msg: str) -> str:
+    """Rút gọn message lỗi (bỏ phần hướng dẫn đợi X giây)."""
     if not msg:
         return "Lỗi không xác định"
-    # Bỏ phần “Vui lòng đợi X giây …”
     msg = re.sub(r"\.?\s*Vui lòng đợi\s*\d+\s*giây.*$", ".", msg, flags=re.IGNORECASE)
     msg = re.sub(r"\.?\s*Please wait\s*\d+\s*seconds.*$", ".", msg, flags=re.IGNORECASE)
     return msg.strip()
+
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
     try:
@@ -42,19 +42,17 @@ def _safe_float(x: Any, default: float = 0.0) -> float:
 
 
 def _web_sources_count(sources: List[dict]) -> int:
-    """Đếm số nguồn web trong danh sách sources."""
+    """Đếm số nguồn web trong sources."""
     c = 0
     for s in sources or []:
         tl = (s.get("type_label") or "").lower()
-        if tl == "web":
-            c += 1
-        elif s.get("type") == 1:
+        if tl == "web" or s.get("type") == 1:
             c += 1
     return c
 
 
 def _pick_top_source(sources: List[dict]) -> Optional[dict]:
-    """Chọn nguồn có tỷ lệ trùng cao nhất."""
+    """Chọn source có score cao nhất."""
     if not sources:
         return None
 
@@ -65,7 +63,7 @@ def _pick_top_source(sources: List[dict]) -> Optional[dict]:
 
 
 def _top_sources(sources: List[dict], k: int = 3) -> List[Dict[str, Any]]:
-    """Lấy top K sources theo score, chuẩn hoá cho UI."""
+    """Top-K sources theo score (chuẩn hoá cho UI)."""
     if not sources:
         return []
 
@@ -81,7 +79,7 @@ def _top_sources(sources: List[dict], k: int = 3) -> List[Dict[str, Any]]:
         out.append(
             {
                 "title": (s.get("title") or "").strip() or "(Không có tiêu đề)",
-                "url": (s.get("url") or "").strip(),  # URL GỐC -> không phụ thuộc login
+                "url": (s.get("url") or "").strip(),
                 "score": score(s),
                 "type_label": (s.get("type_label") or "").strip(),
             }
@@ -102,12 +100,7 @@ def _process_single_chunk(
     section_type: str = "BODY",
     payload_extra: Optional[dict] = None,
 ) -> Dict[str, Any]:
-    """Xử lý một chunk song song và trả về dict kết quả.
-
-    Quan trọng:
-    - Mỗi worker tự tạo client (requests.Session riêng) để thread-safe.
-    - payload_extra dùng để override filter (REF vs BODY).
-    """
+    """Worker xử lý 1 chunk (mỗi worker dùng 1 Session riêng)."""
     client = PlagiarismSearchClient(api_user, api_key)
 
     try:
@@ -133,11 +126,10 @@ def _process_single_chunk(
         top = _pick_top_source(sources)
 
         report_link = (data.get("link") or "").strip()
-        top_url = (top or {}).get("url") or ""  # URL gốc
+        top_url = (top or {}).get("url") or ""
         top_title = (top or {}).get("title") or ""
         top_score = _safe_float((top or {}).get("plagiat") or (top or {}).get("plagiarism") or 0.0, 0.0)
 
-        # NEW: top 3 sources
         top_sources = _top_sources(sources, k=3)
 
         logger.info(
@@ -155,15 +147,10 @@ def _process_single_chunk(
             "checked_words": checked_words,
             "web_sources": web_sources,
             "sources_count": len(sources),
-
-            # backward compatible fields
             "top_source_title": top_title,
             "top_source_url": top_url,
             "top_source_score": top_score,
-
-            # recommended UI field
             "top_sources": top_sources,
-
             "report_link": report_link,
             "text": (chunk.text[:500] + "...") if len(chunk.text) > 500 else chunk.text,
         }
@@ -182,7 +169,7 @@ def _process_single_chunk(
             "top_source_title": f"ERROR: {short}",
             "top_source_url": "",
             "top_source_score": 0.0,
-            "top_sources": [],  # NEW: luôn có key để UI khỏi crash
+            "top_sources": [],
             "report_link": "",
             "text": (chunk.text[:500] + "...") if len(chunk.text) > 500 else chunk.text,
         }
@@ -199,7 +186,7 @@ def check_plagiarism_body_only(
     timeout_s: int = 600,
     use_dynamic_chunks: bool = True,
 ) -> Dict[str, Any]:
-    """Kiểm tra đạo văn phần thân bài, chia đoạn động và chạy song song."""
+    """Check đạo văn phần thân bài (chunk động + song song)."""
     api_user, api_key = _require_creds()
 
     full_text = "\n".join(_docx_paragraph_texts(docx_path))
@@ -261,8 +248,9 @@ def check_plagiarism_body_only(
                 try:
                     finding = future.result()
                     findings.append(finding)
-                    total_checked_words += int(finding.get("checked_words") or 0)
-                    total_weighted_similarity += _safe_float(finding.get("similarity"), 0.0) * int(finding.get("checked_words") or 0)
+                    cw = int(finding.get("checked_words") or 0)
+                    total_checked_words += cw
+                    total_weighted_similarity += _safe_float(finding.get("similarity"), 0.0) * cw
                 except Exception as e:
                     logger.error("Worker error: %s", str(e))
 
@@ -305,7 +293,7 @@ def check_plagiarism_full(
     timeout_s: int = 600,
     use_dynamic_chunks: bool = True,
 ) -> Dict[str, Any]:
-    """Kiểm tra đạo văn cho thân bài và phần tham khảo, dùng chunk động và xử lý song song."""
+    """Check đạo văn thân bài + tham khảo (chunk động + song song)."""
     api_user, api_key = _require_creds()
 
     full_text = "\n".join(_docx_paragraph_texts(docx_path))
@@ -313,7 +301,7 @@ def check_plagiarism_full(
 
     result: Dict[str, Any] = {
         "success": True,
-        "overall_score": 0.0,  # 0..1
+        "overall_score": 0.0,
         "body_findings": [],
         "reference_findings": [],
         "total_chunks": 0,

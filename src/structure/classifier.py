@@ -1,5 +1,4 @@
-"""LLM classifier for scientific article structure.
-"""
+"""LLM classifier: phát hiện presence các mục cấu trúc bài báo."""
 
 from __future__ import annotations
 
@@ -22,9 +21,9 @@ except Exception:
     OPENAI_AVAILABLE = False
 
 
-# -----------------------------
+# ----------------------------
 # Structure targets (fixed)
-# -----------------------------
+# ----------------------------
 TARGETS = [
     ("title_vi", "Tiêu đề tiếng Việt"),
     ("title_en", "Tiêu đề tiếng Anh"),
@@ -48,9 +47,9 @@ TARGET_IDS = [k for k, _ in TARGETS]
 TARGETS_JSON = json.dumps([{"id": k, "label": lbl} for k, lbl in TARGETS], ensure_ascii=False)
 
 
-# -----------------------------
+# ----------------------------
 # References style (cheap heuristic)
-# -----------------------------
+# ----------------------------
 _RE_IEEE_BRACKET = re.compile(r"^\s*\[\d+\]\s+")
 _RE_VANCOUVER_NUM = re.compile(r"^\s*\d+\.\s+")
 _RE_APA_YEAR = re.compile(r"\(\s*(19|20)\d{2}\s*\)")
@@ -58,7 +57,7 @@ _RE_DOI = re.compile(r"\bdoi:\s*\S+|\b10\.\d{4,9}/\S+", flags=re.IGNORECASE)
 
 
 def guess_references_style(ref_text: str, *, sample_size: int = 30) -> str:
-    """Đoán nhanh style tài liệu tham khảo (không dùng để quyết định presence)."""
+    """Đoán style tham khảo từ vài dòng đầu (chỉ để gợi ý)."""
     lines = [l.strip() for l in (ref_text or "").splitlines() if l.strip()]
     if not lines:
         return "Unknown"
@@ -69,7 +68,6 @@ def guess_references_style(ref_text: str, *, sample_size: int = 30) -> str:
     apa_hits = sum(1 for l in sample if _RE_APA_YEAR.search(l))
     doi_hits = sum(1 for l in sample if _RE_DOI.search(l))
 
-    # Ngưỡng thô (nỗ lực tốt nhất)
     if ieee_hits >= 3:
         return "IEEE"
     if van_hits >= 3 and ieee_hits == 0:
@@ -81,10 +79,11 @@ def guess_references_style(ref_text: str, *, sample_size: int = 30) -> str:
     return "Unknown"
 
 
-# -----------------------------
+# ----------------------------
 # Helpers
-# -----------------------------
+# ----------------------------
 def _norm_ws(s: str) -> str:
+    """Chuẩn hoá khoảng trắng để prompt ổn định."""
     s = (s or "").replace("\u00A0", " ")
     s = re.sub(r"[ \t]+", " ", s).strip()
     s = re.sub(r"\n{3,}", "\n\n", s).strip()
@@ -92,6 +91,7 @@ def _norm_ws(s: str) -> str:
 
 
 def _get_openai_client() -> OpenAI:
+    """Tạo OpenAI client sau khi validate API key."""
     is_valid, api_key, error_msg = validate_openai_api_key()
     if not is_valid:
         raise APIValidationError(error_msg, f"OpenAI API validation failed: {error_msg}")
@@ -99,7 +99,7 @@ def _get_openai_client() -> OpenAI:
 
 
 def _safe_load_json(text: str) -> Dict[str, Any]:
-    """Parse JSON robustly (LLM đôi khi dính extra text)."""
+    """Parse JSON “chịu lỗi” khi LLM dính text thừa."""
     txt = (text or "").strip()
     if not txt:
         return {}
@@ -116,6 +116,7 @@ def _safe_load_json(text: str) -> Dict[str, Any]:
 
 
 def _normalize_output(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Chuẩn hoá output: đủ key, clamp confidence, cắt evidence/reason."""
     out: Dict[str, Any] = {"sections": {}, "references_style": "Unknown"}
 
     refs_style = str((data or {}).get("references_style") or "Unknown").strip()
@@ -124,7 +125,6 @@ def _normalize_output(data: Dict[str, Any]) -> Dict[str, Any]:
     out["references_style"] = refs_style
 
     sec_map = (data or {}).get("sections") or {}
-    # Ensure all keys exist (stable UI)
     for tid in TARGET_IDS:
         raw = sec_map.get(tid) or {}
         present = bool(raw.get("present", False))
@@ -145,13 +145,12 @@ def _normalize_output(data: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-# -----------------------------
+# ----------------------------
 # Main LLM API
-# -----------------------------
+# ----------------------------
 @rate_limit(openai_limiter)
 @retry_with_backoff(max_retries=3, initial_delay=2.0)
 def llm_detect_structure(*, view_text: str, openai_model: str = DEFAULT_LLM_MODEL) -> Dict[str, Any]:
-
     if not OPENAI_AVAILABLE:
         raise RuntimeError("OPENAI_AVAILABLE=False (pip install openai)")
 
@@ -263,29 +262,18 @@ def llm_detect_structure(*, view_text: str, openai_model: str = DEFAULT_LLM_MODE
 
     [SPECIAL CASE]
     16) abstract_en:
-    - Ưu tiên [FRONT]: nếu có block tiếng Anh tóm tắt trong [FRONT] => present=true (confidence theo rule chung).
-    - Nếu KHÔNG có ở [FRONT] nhưng trong [TAIL] có heading đúng chính tả "Summary" và sau đó là block tiếng Anh tóm tắt => present=true, confidence=0.80.
-    - Nếu chỉ thấy tiếng Anh rời rạc/không phải block tóm tắt => present=false.
+    - Ưu tiên [FRONT]: nếu có block tiếng Anh tóm tắt trong [FRONT] => present=true.
+    - Fallback [TAIL]: nếu có heading đúng "Summary" + block tóm tắt => present=true, confidence=0.80.
+    - Còn lại => present=false.
 
     ========================
     REFERENCES_STYLE (chỉ khi references.present=true)
     ========================
-    - APA: có "(YYYY)" ngay sau tác giả VÀ có "&" giữa tác giả ở nhiều mục.
-    - Chicago: "Tác giả. YYYY. Tiêu đề. Địa điểm: NXB."
-    - Vancouver: danh sách đánh số "1." và có mẫu "YYYY;Vol(Issue):Pages".
-    - Unknown: <3 mục tham khảo hoặc định dạng lẫn lộn/không khớp.
-
-    CÁCH CHỌN:
-    - Nhìn ít nhất 3 mục tham khảo đầu (nếu có). Nếu không đủ 3 => Unknown.
-    - Nếu thấy dấu "&" + "(YYYY)" nhất quán => APA.
+    - Dựa trên >=3 mục đầu; thiếu => Unknown.
 
     ========================
-    OUTPUT (CHỈ JSON, KHÔNG MARKDOWN, KHÔNG TEXT THỪA)
+    OUTPUT (CHỈ JSON)
     ========================
-    - In ra đúng JSON object theo schema dưới đây.
-    - Không thêm key mới. Không đổi tên key. Dùng dấu ngoặc kép chuẩn JSON.
-    - Không trailing comma.
-
     {{
         "sections": {{
             "title_vi": {{"present": false, "confidence": 0.0, "evidence": "", "reason": ""}},
@@ -309,14 +297,14 @@ def llm_detect_structure(*, view_text: str, openai_model: str = DEFAULT_LLM_MODE
     }}
 
     ========================
-    VĂN BẢN CẦN PHÂN TÍCH (VIEW)
+    VIEW
     ========================
     {view_text}
     """
 
     client = _get_openai_client()
-    # Prefer JSON-only responses when the SDK/model supports it.
-    # Use max_tokens=3000 to ensure full JSON output for all 16 sections
+
+    # Prefer JSON-mode nếu SDK/model hỗ trợ
     try:
         resp = client.chat.completions.create(
             model=openai_model,
@@ -326,18 +314,19 @@ def llm_detect_structure(*, view_text: str, openai_model: str = DEFAULT_LLM_MODE
             response_format={"type": "json_object"},
         )
     except TypeError:
-        # Backward-compat for older SDKs
+        # Backward-compat cho SDK cũ
         resp = client.chat.completions.create(
             model=openai_model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=3000,
         )
+
     txt = (resp.choices[0].message.content or "").strip()
 
     data = _safe_load_json(txt)
     if not data:
-        logger.warning("LLM returned non-JSON or empty. Raw head=%r", txt[:200])
+        logger.warning("LLM returned non-JSON/empty. Raw head=%r", txt[:200])
         return _normalize_output({})
 
     return _normalize_output(data)

@@ -1,4 +1,5 @@
-"""Bộ nhớ đệm tài liệu để tránh phân tích lại file DOCX."""
+"""Cache tài liệu để tránh parse/đọc DOCX lặp lại."""
+
 from __future__ import annotations
 
 import logging
@@ -10,10 +11,7 @@ logger = logging.getLogger("utils.cache")
 
 
 def _normalize_text(text: str) -> str:
-    """Chuẩn hoá văn bản để đồng nhất offset cho các thành phần (refs, spell, UI).
-
-    Hành động: NFC, loại BOM/zero-width, giữ nguyên xuống dòng.
-    """
+    """Chuẩn hoá text để offset ổn định (NFC, bỏ BOM/zero-width)."""
     if not text:
         return ""
     t = unicodedata.normalize("NFC", text)
@@ -24,7 +22,7 @@ def _normalize_text(text: str) -> str:
 
 @dataclass
 class DocumentCache:
-    """Bộ nhớ đệm chung sau khi trích xuất DOCX, tránh đọc lặp lại."""
+    """Giữ text/paras/ref_span sau khi đọc DOCX 1 lần."""
     text: str  # Full extracted text (normalized)
     paras: List  # List of DocPara from structure module
     word_count: int  # Total words in document (normalized text)
@@ -33,7 +31,7 @@ class DocumentCache:
 
     @classmethod
     def from_docx(cls, file_path: str) -> "DocumentCache":
-        """Phân tích DOCX một lần và tạo DocumentCache."""
+        """Parse DOCX một lần, trả cache dùng chung cho các bước check."""
         # Absolute imports to avoid relative import issues
         from structure.parser import extract_docx_paragraphs
         from spell.reference_finder import find_references_span
@@ -41,19 +39,15 @@ class DocumentCache:
 
         logger.debug(f"Creating document cache from: {file_path}")
 
-        # Trích xuất văn bản thô và danh sách đoạn
         raw_text = extract_text_from_docx(file_path)
         paras = extract_docx_paragraphs(file_path)
 
-        # Chuẩn hóa văn bản 1 lần để offset ổn định
         text = _normalize_text(raw_text)
-
         total_words = len(text.split())
 
-        # Phát hiện span references trên văn bản đã chuẩn hoá
         ref_span = find_references_span(text)
 
-        # Tính số từ trước phần references để báo cáo (không dùng cho cắt offset)
+        # Số từ trước references (chỉ phục vụ báo cáo)
         if ref_span:
             ref_start = max(0, min(ref_span[0], len(text)))
             checked_words = len(text[:ref_start].split())

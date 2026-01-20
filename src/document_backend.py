@@ -8,9 +8,9 @@ from typing import Any, Dict, Optional, List
 from docx import Document
 from dotenv import load_dotenv
 
-# ─────────────────────────────────────────
+# ----------------------------
 # Env + logging
-# ─────────────────────────────────────────
+# ----------------------------
 root_dir = Path(__file__).parent.parent
 load_dotenv(root_dir / ".env", override=True)
 
@@ -20,7 +20,9 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
-# Import plagiarism checker
+# ----------------------------
+# Plagiarism imports (optional)
+# ----------------------------
 PLAGIARISM_API_AVAILABLE = True
 try:
     from plagiarism.checker import check_plagiarism_body_only
@@ -30,11 +32,11 @@ except Exception as e:
     PLAGIARISM_API_AVAILABLE = False
 
 
-# ─────────────────────────────────────────
+# ----------------------------
 # Helpers
-# ─────────────────────────────────────────
+# ----------------------------
 def extract_text_from_docx(path: str) -> str:
-    """Trích xuất văn bản đơn giản cho UI chính tả và đếm từ."""
+    """Extract text đơn giản (phục vụ UI spell/word count)."""
     try:
         if not path or not isinstance(path, str):
             logger.error("Invalid path: %s", path)
@@ -66,9 +68,9 @@ def extract_text_from_docx(path: str) -> str:
 
 
 def _empty_plagiarism_result(*, total_words: int, note: str) -> Dict[str, Any]:
-    """Schema ổn định cho UI kể cả khi API không khả dụng."""
+    """Schema rỗng để UI hiển thị note thay vì crash."""
     return {
-        "success": True,          # giữ True để UI hiển thị note thay vì báo lỗi
+        "success": True,          # UI: show note, không coi là lỗi
         "overall_score": 0.0,     # 0..1
         "findings": [],
         "total_chunks": 0,
@@ -77,9 +79,9 @@ def _empty_plagiarism_result(*, total_words: int, note: str) -> Dict[str, Any]:
     }
 
 
-# ─────────────────────────────────────────
+# ----------------------------
 # Public API
-# ─────────────────────────────────────────
+# ----------------------------
 def check_plagiarism_in_file(
     file_path: str,
     index_dir: str = "",
@@ -90,11 +92,7 @@ def check_plagiarism_in_file(
     use_llm_verify: bool = False,
     parsed_paras: Optional[List] = None,
 ) -> Dict[str, Any]:
-    """
-    Wrapper backend cho UI.
-    Hiện tại dùng PlagiarismSearch API (check_plagiarism_body_only).
-    Các tham số index_dir/topk/... để tương thích interface cũ (chưa dùng trong API mode).
-    """
+    """Wrapper cho UI: gọi PlagiarismSearch (giữ signature tương thích)."""
     try:
         if not file_path or not isinstance(file_path, str):
             logger.error("Invalid file_path: %s", file_path)
@@ -107,7 +105,7 @@ def check_plagiarism_in_file(
 
         logger.info("Starting plagiarism check: %s", p.name)
 
-        # Ưu tiên dùng parsed_paras để tính word_count nhanh/nhất quán với UI
+        # Ưu tiên parsed_paras để lấy text nhanh và nhất quán
         if parsed_paras is not None:
             logger.debug("Using cached paragraphs (%d paras) for plagiarism word_count", len(parsed_paras))
             full_text = "\n".join((pp.text for pp in parsed_paras if getattr(pp, "text", None)))
@@ -122,7 +120,7 @@ def check_plagiarism_in_file(
         total_words = len(full_text.split())
         logger.debug("Extracted %d words from %s", total_words, p.name)
 
-        # 1) Checker module không import được => coi như không có API
+        # 1) Module không sẵn
         if not PLAGIARISM_API_AVAILABLE:
             logger.warning("PlagiarismSearch module not available")
             return _empty_plagiarism_result(
@@ -130,7 +128,7 @@ def check_plagiarism_in_file(
                 note="Module PlagiarismSearch không khả dụng (import thất bại).",
             )
 
-        # 2) Validate creds bằng đúng cơ chế của client (nguồn chân lý)
+        # 2) Creds chưa ok
         try:
             api_user, _ = _require_creds()
             logger.info("PlagiarismSearch API configured: %s", api_user)
@@ -141,7 +139,7 @@ def check_plagiarism_in_file(
                 note="PlagiarismSearch API chưa được cấu hình hoặc không hợp lệ",
             )
 
-        # 3) Gọi API plagiarism checker (dynamic chunking + parallel ở layer checker)
+        # 3) Call checker
         logger.debug("Submitting file for plagiarism check (timeout=900s)")
         result = check_plagiarism_body_only(
             docx_path=file_path,
@@ -149,15 +147,12 @@ def check_plagiarism_in_file(
             use_dynamic_chunks=True,
         ) or {}
 
-        # 4) Chuẩn hoá schema cơ bản để UI luôn an toàn
-        # check_plagiarism_body_only thường trả: success, overall_score(0..1), findings, total_chunks, total_words...
+        # 4) Normalize schema cho UI
         out: Dict[str, Any] = dict(result)
         out["success"] = bool(out.get("success", True))
         out["overall_score"] = float(out.get("overall_score") or 0.0)
         out["findings"] = out.get("findings") or []
         out["total_chunks"] = int(out.get("total_chunks") or len(out["findings"]) or 0)
-
-        # Ensure total_words là word_count của toàn bộ tài liệu (không phải checked_words của chunks)
         out["total_words"] = int(total_words or 0)
 
         logger.info("Plagiarism check completed. overall_score=%.4f", out["overall_score"])

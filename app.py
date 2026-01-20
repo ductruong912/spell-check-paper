@@ -1,4 +1,4 @@
-"""Ứng dụng Streamlit: kiểm tra chính tả, cấu trúc và đạo văn cho file DOCX."""
+"""Streamlit app: kiểm tra chính tả, cấu trúc và đạo văn cho DOCX."""
 from __future__ import annotations
 
 import html
@@ -14,30 +14,30 @@ from typing import Dict, List, Tuple
 import streamlit as st
 from dotenv import load_dotenv
 
-# ─────────────────────────────────────────
-# Logging Configuration
-# ─────────────────────────────────────────
+# ----------------------------
+# Logging
+# ----------------------------
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
 
-# Silence verbose third-party libraries
+# Giảm log ồn từ lib ngoài
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("openai").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("requests").setLevel(logging.WARNING)
 
-# ─────────────────────────────────────────
-# Environment Setup
-# ─────────────────────────────────────────
+# ----------------------------
+# Env / paths
+# ----------------------------
 load_dotenv()
 
 BASE_DIR = Path(__file__).parent.resolve()
 SRC_DIR = BASE_DIR / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-# ─────────────────────────────────────────
-# Streamlit Page Config (MUST be called before any other st.*)
-# ─────────────────────────────────────────
+# ----------------------------
+# Streamlit page config
+# ----------------------------
 logo_path = BASE_DIR / "logo" / "logo_tringhia.jpg"
 st.set_page_config(
     page_title="TNT Check AI",
@@ -45,13 +45,13 @@ st.set_page_config(
     layout="wide",
 )
 
-# ─────────────────────────────────────────
-# Global CSS (Light/Dark adaptive)  ✅ FIX: metric text visible in both themes
-# ─────────────────────────────────────────
+# ----------------------------
+# Global CSS (light/dark)
+# ----------------------------
 st.markdown(
     """
     <style>
-      /* Metric card base */
+      /* Metric card */
       .tnt-metric {
         padding: 0.6rem 0.9rem;
         border-radius: 14px;
@@ -63,21 +63,21 @@ st.markdown(
         font-size: 0.85rem;
         font-weight: 800;
         margin-bottom: 0.25rem;
-        color: rgba(49,51,63,0.65); /* light default */
+        color: rgba(49,51,63,0.65);
       }
       .tnt-metric-value {
         font-size: 2.2rem;
         font-weight: 900;
         line-height: 1.0;
-        color: rgba(49,51,63,0.95); /* light default */
+        color: rgba(49,51,63,0.95);
       }
 
-      /* Accent label colors (safe on both themes) */
+      /* Accent */
       .tnt-accent-red { color: #ff4d4f !important; }
-      .tnt-accent-yellow { color: #d4b106 !important; } /* darker yellow for light theme */
+      .tnt-accent-yellow { color: #d4b106 !important; }
 
-      /* Loading spinner */
-        .tnt-loading {
+      /* Spinner */
+      .tnt-loading {
         display: inline-flex;
         align-items: center;
         gap: 0;
@@ -85,7 +85,7 @@ st.markdown(
         border: 0;
         border-radius: 0;
         background: transparent;
-        }
+      }
       .tnt-spin {
         width: 24px;
         height: 24px;
@@ -94,11 +94,9 @@ st.markdown(
         border-top-color: #0099ff;
         animation: tnt-rotate 0.8s linear infinite;
       }
-      @keyframes tnt-rotate {
-        to { transform: rotate(360deg); }
-      }
+      @keyframes tnt-rotate { to { transform: rotate(360deg); } }
 
-      /* Dark mode override */
+      /* Dark override */
       @media (prefers-color-scheme: dark) {
         .tnt-metric {
           border: 1px solid rgba(255,255,255,0.12);
@@ -106,27 +104,27 @@ st.markdown(
         }
         .tnt-metric-title { color: rgba(255,255,255,0.72); }
         .tnt-metric-value { color: rgba(255,255,255,0.95); }
-        .tnt-accent-yellow { color: #fadb14 !important; } /* bright yellow works on dark */
+        .tnt-accent-yellow { color: #fadb14 !important; }
       }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ─────────────────────────────────────────
-# Module Imports
-# ─────────────────────────────────────────
+# ----------------------------
+# Module imports
+# ----------------------------
 from utils.cache import DocumentCache
 from utils.config import MAX_WORKERS
 from ui.handlers import check_structure, check_spell, check_plagiarism
 from ui.components import highlight_html
 from ui.layout import render_plagiarism_section, render_structure_section
 
-# ─────────────────────────────────────────
+# ----------------------------
 # Helpers (UI)
-# ─────────────────────────────────────────
+# ----------------------------
 def _count_issue_types(issues: List[Dict]) -> Tuple[int, int, int]:
-    """Returns: (en_count, vi_count, other_count)"""
+    """Trả (en_count, vi_count, other_count)."""
     if not issues:
         return 0, 0, 0
     en = vi = other = 0
@@ -143,35 +141,33 @@ def _count_issue_types(issues: List[Dict]) -> Tuple[int, int, int]:
 
 import re
 
-# Regex để phát hiện phần của email (vd: dieuanh.ln, tmu.edu)
-EMAIL_PART_RE = re.compile(r'^[a-z0-9._-]+$', re.I)
+# Token kiểu "dieuanh.ln", "tmu.edu" (thường là mảnh của email/domain)
+EMAIL_PART_RE = re.compile(r"^[a-z0-9._-]+$", re.I)
 
 
 def _decorate_issues_for_ui(issues: List[Dict]) -> List[Dict]:
-    """Adds ui_color field used by highlight_html."""
+    """Gắn ui_color cho highlight (lọc bớt token dạng email/domain)."""
     out: List[Dict] = []
     for it in (issues or []):
         t = (it.get("type") or "").strip()
         word = (it.get("word") or it.get("text") or "").strip()
-        
-        # Skip các từ trông giống email (có dấu chấm và chỉ chứa ký tự email)
-        if '.' in word and EMAIL_PART_RE.match(word):
+
+        if "." in word and EMAIL_PART_RE.match(word):
             continue
-        
+
         it2 = dict(it)
         if t == "en_spelling":
             it2["ui_color"] = "red"
         elif t.startswith("vi_"):
             it2["ui_color"] = "yellow"
         else:
-            # Bỏ qua các loại khác (không highlight)
             continue
         out.append(it2)
     return out
 
 
 def _is_spell_ok(spell_result: Dict) -> bool:
-    # spellcheck returns {"issues": [...], "total_words": ... , "meta": ...}
+    """True nếu spell trả schema hợp lệ."""
     return isinstance(spell_result, dict) and "issues" in spell_result
 
 
@@ -179,20 +175,14 @@ def _render_status_bar(
     placeholders: Dict[str, st.delta_generator.DeltaGenerator],
     states: Dict[str, Dict],
 ):
-    """
-    placeholders: {"doc": empty, "spell": empty, "structure": empty, "plagiarism": empty}
-    states: {"doc": {"state": ..., "msg": ...}, ...}
-    """
+    """Render status bar theo states."""
     for k, ph in placeholders.items():
         info = states.get(k, {"state": "idle", "msg": ""})
         ph.markdown(f"**{k.upper()}**  \n{info.get('msg','')}")
 
 
 def _render_metric_card(title: str, value: str | int, accent: str | None = None) -> None:
-    """
-    Custom metric card (theme-adaptive).
-    accent: None | "red" | "yellow"
-    """
+    """Metric card tuỳ biến (hợp light/dark)."""
     accent_class = ""
     if accent == "red":
         accent_class = "tnt-accent-red"
@@ -237,25 +227,15 @@ def _render_doc_and_spell(
 
         en_count, vi_count, other_count = _count_issue_types(issues)
 
-        # ── metrics (aligned cards)
         c1, c2, c3 = st.columns(3)
         with c1:
             _render_metric_card("Số từ", word_count)
         with c2:
-            _render_metric_card(
-                "Lỗi chính tả (EN)",
-                en_count if is_spell_ready else "—",
-                accent="red",
-            )
+            _render_metric_card("Lỗi chính tả (EN)", en_count if is_spell_ready else "—", accent="red")
         with c3:
-            _render_metric_card(
-                "Nghi ngờ (VI)",
-                vi_count if is_spell_ready else "—",
-                accent="yellow",
-            )
+            _render_metric_card("Nghi ngờ (VI)", vi_count if is_spell_ready else "—", accent="yellow")
 
-
-        # Fast preview first, then upgrade to highlighted HTML when spell is ready
+        # Khi spell xong thì render highlight; chưa xong thì show text_area nhanh
         if is_spell_ready:
             issues_for_ui = _decorate_issues_for_ui(issues)
             html_out = highlight_html(text, issues_for_ui)
@@ -264,56 +244,45 @@ def _render_doc_and_spell(
             <style>
             html, body { margin:0; padding:0; }
             body {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-                font-size: 16px;
-                line-height: 1.55;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+              font-size: 16px;
+              line-height: 1.55;
             }
-
-            /* wrapper */
             .tnt-doc {
-                padding: 14px 16px;
-                max-height: 800px;
-                overflow: auto;
-                border-radius: 12px;
+              padding: 14px 16px;
+              max-height: 800px;
+              overflow: auto;
+              border-radius: 12px;
             }
-
-            /* Make sure highlight spans don't inherit weird defaults */
             .tnt-doc span { color: inherit; }
 
-            /* Light mode */
             @media (prefers-color-scheme: light) {
-                body { background: #ffffff; color: #111827; }
-                .tnt-doc { background: #ffffff; }
+              body { background: #ffffff; color: #111827; }
+              .tnt-doc { background: #ffffff; }
+            }
+            @media (prefers-color-scheme: dark) {
+              body { background: #0e1117; color: rgba(255,255,255,0.92); }
+              .tnt-doc { background: #0e1117; }
             }
 
-            /* Dark mode */
-            @media (prefers-color-scheme: dark) {
-                body { background: #0e1117; color: rgba(255,255,255,0.92); }
-                .tnt-doc { background: #0e1117; }
-            }
-            /* Simple spinner loader */
             .tnt-loading {
-            display: inline-flex;
-            align-items: center;
-            gap: 0;
-            padding: 0;
-            border: 0;
-            border-radius: 0;
-            background: transparent;
+              display: inline-flex;
+              align-items: center;
+              gap: 0;
+              padding: 0;
+              border: 0;
+              border-radius: 0;
+              background: transparent;
             }
             .tnt-spin {
-            width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            border: 3px solid rgba(255,255,255,0.25);
-            border-top-color: rgba(255,255,255,0.9);
-            animation: tnt-rotate 0.8s linear infinite;
+              width: 18px;
+              height: 18px;
+              border-radius: 50%;
+              border: 3px solid rgba(255,255,255,0.25);
+              border-top-color: rgba(255,255,255,0.9);
+              animation: tnt-rotate 0.8s linear infinite;
             }
-
-            @keyframes tnt-rotate {
-            to { transform: rotate(360deg); }
-            }
-
+            @keyframes tnt-rotate { to { transform: rotate(360deg); } }
             </style>
             """
 
@@ -332,6 +301,7 @@ def _render_doc_and_spell(
 
 
 def _render_plagiarism(placeholder, *, data: Dict, state: str, error: str | None):
+    """Render section đạo văn theo state."""
     placeholder.empty()
     with placeholder.container():
         st.subheader("Kiểm tra đạo văn")
@@ -353,6 +323,7 @@ def _render_plagiarism(placeholder, *, data: Dict, state: str, error: str | None
 
 
 def _render_structure(placeholder, *, data: Dict, state: str, error: str | None):
+    """Render section cấu trúc theo state."""
     placeholder.empty()
     with placeholder.container():
         st.subheader("Cấu trúc bài báo")
@@ -374,10 +345,7 @@ def _render_structure(placeholder, *, data: Dict, state: str, error: str | None)
 
 
 def _cleanup_old_tmp_files(ttl_seconds: int = 2 * 60 * 60) -> None:
-    """
-    Best-effort cleanup for temp DOCX files we kept (e.g., due to background tasks).
-    This runs on every rerun, so it won't leak indefinitely.
-    """
+    """Dọn temp DOCX cũ (best-effort, chạy mỗi rerun)."""
     garbage: List[str] = st.session_state.get("_tmp_garbage", [])
     if not garbage:
         return
@@ -398,6 +366,7 @@ def _cleanup_old_tmp_files(ttl_seconds: int = 2 * 60 * 60) -> None:
 
 
 def _reset_results_state() -> None:
+    """Reset state khi bấm 'Kiểm tra'."""
     st.session_state.text = ""
     st.session_state.issues = []
     st.session_state.word_count = 0
@@ -409,18 +378,18 @@ def _reset_results_state() -> None:
     st.session_state.plagiarism_check_error = None
 
 
-# ─────────────────────────────────────────
+# ----------------------------
 # Streamlit UI
-# ─────────────────────────────────────────
+# ----------------------------
 st.title("TNT Check AI")
 
 _cleanup_old_tmp_files()
 
-SHOW_STATUS_BAR = False  # set True if you want the top status bar back
+SHOW_STATUS_BAR = False  # bật nếu muốn status bar phía trên
 
-# ─────────────────────────────────────────
-# Sidebar - File Upload
-# ─────────────────────────────────────────
+# ----------------------------
+# Sidebar - upload
+# ----------------------------
 with st.sidebar:
     st.subheader("Upload bài báo")
     f = st.file_uploader("Chọn file DOCX", type=["docx"])
@@ -432,14 +401,14 @@ with st.sidebar:
         disabled=(f is None),
     )
 
-# ─────────────────────────────────────────
-# Session State Initialization
-# ─────────────────────────────────────────
+# ----------------------------
+# Session state
+# ----------------------------
 st.session_state.setdefault("text", "")
 st.session_state.setdefault("issues", [])
 st.session_state.setdefault("word_count", 0)
 st.session_state.setdefault("file_name", "")
-st.session_state.setdefault("file_size", 0)  # Track file size to detect changes
+st.session_state.setdefault("file_size", 0)
 st.session_state.setdefault("structure", {})
 st.session_state.setdefault("plagiarism", {})
 st.session_state.setdefault("spell_check_error", None)
@@ -447,9 +416,9 @@ st.session_state.setdefault("structure_check_error", None)
 st.session_state.setdefault("plagiarism_check_error", None)
 st.session_state.setdefault("_tmp_garbage", [])
 
-# ─────────────────────────────────────────
-# Layout placeholders (so we can update them incrementally)
-# ─────────────────────────────────────────
+# ----------------------------
+# Layout placeholders
+# ----------------------------
 if SHOW_STATUS_BAR:
     status_bar = st.container()
     with status_bar:
@@ -471,7 +440,7 @@ with right:
     st.divider()
     structure_placeholder = st.empty()
 
-# Render current state by default (useful on rerun)
+# Render state hiện tại (hữu ích khi rerun)
 _render_doc_and_spell(
     doc_placeholder,
     file_name=st.session_state.file_name,
@@ -494,17 +463,16 @@ _render_structure(
     error=st.session_state.structure_check_error,
 )
 
-# ─────────────────────────────────────────
-# Main Workflow - progressive results
-# ─────────────────────────────────────────
+# ----------------------------
+# Main workflow (progressive)
+# ----------------------------
 if f and run_check:
-    # Get current file info
+    # Đọc nội dung file để detect thay đổi + lưu temp
     f.seek(0)
     current_file_content = f.read()
     current_file_size = len(current_file_content)
-    f.seek(0)  # Reset for later use
-    
-    # Always reset results when checking
+    f.seek(0)
+
     _reset_results_state()
     st.session_state.file_size = current_file_size
 
@@ -528,12 +496,12 @@ if f and run_check:
     ex: ThreadPoolExecutor | None = None
 
     try:
-        # Save upload to a temp file once
+        # 1) Lưu file upload vào temp
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(current_file_content)
             tmp_path = tmp.name
 
-        # 1) Parse DOCX (fast) and show context immediately
+        # 2) Parse DOCX (nhanh) để show text ngay
         t0 = time.monotonic()
         doc_cache = DocumentCache.from_docx(tmp_path)
         t_parse = time.monotonic() - t0
@@ -553,7 +521,6 @@ if f and run_check:
                 status_states,
             )
 
-        # Render doc right after parsing (no highlight yet)
         _render_doc_and_spell(
             doc_placeholder,
             file_name=st.session_state.file_name,
@@ -566,7 +533,7 @@ if f and run_check:
         _render_plagiarism(plagiarism_placeholder, data={}, state="running", error=None)
         _render_structure(structure_placeholder, data={}, state="running", error=None)
 
-        # 2) Run checks in parallel; update UI as each completes
+        # 3) Chạy song song + timeout guard
         timeouts = {"spell": 60, "structure": 120, "plagiarism": 900}
         starts = {k: time.monotonic() for k in timeouts}
 
@@ -584,7 +551,6 @@ if f and run_check:
         while pending:
             done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
 
-            # timeout guard
             now = time.monotonic()
             for name, fut in futures.items():
                 if name in finished:
@@ -606,12 +572,7 @@ if f and run_check:
                         }
                         st.session_state.structure_check_error = "Quá thời gian xử lý (>120s)"
                         status_states["structure"] = {"state": "timeout", "msg": "Timeout >120s"}
-                        _render_structure(
-                            structure_placeholder,
-                            data=st.session_state.structure,
-                            state="timeout",
-                            error=st.session_state.structure_check_error,
-                        )
+                        _render_structure(structure_placeholder, data=st.session_state.structure, state="timeout", error=st.session_state.structure_check_error)
 
                     elif name == "spell":
                         st.session_state.issues = []
@@ -636,12 +597,7 @@ if f and run_check:
                         }
                         st.session_state.plagiarism_check_error = "Quá thời gian xử lý (>900s)"
                         status_states["plagiarism"] = {"state": "timeout", "msg": "Timeout >900s"}
-                        _render_plagiarism(
-                            plagiarism_placeholder,
-                            data=st.session_state.plagiarism,
-                            state="timeout",
-                            error=st.session_state.plagiarism_check_error,
-                        )
+                        _render_plagiarism(plagiarism_placeholder, data=st.session_state.plagiarism, state="timeout", error=st.session_state.plagiarism_check_error)
 
                     if SHOW_STATUS_BAR:
                         _render_status_bar(
@@ -649,7 +605,6 @@ if f and run_check:
                             status_states,
                         )
 
-            # handle completed futures
             for fut in done:
                 name = rev[fut]
                 if name in finished:
@@ -747,9 +702,7 @@ if f and run_check:
                 status_states,
             )
     finally:
-        # IMPORTANT:
-        # - If any task timed out, the worker thread might still be running and may still need tmp_path.
-        # - We keep the tmp file and clean it up later via _cleanup_old_tmp_files().
+        # Nếu có timeout: giữ tmp để thread còn dùng, dọn sau bằng _cleanup_old_tmp_files()
         if tmp_path:
             if any_timeout:
                 st.session_state["_tmp_garbage"].append(tmp_path)
@@ -761,7 +714,6 @@ if f and run_check:
                 except Exception as e:
                     logger.warning("Không thể xóa file tạm %s: %s", tmp_path, e)
 
-        # Don't block the UI waiting for threads
         if ex is not None:
             try:
                 ex.shutdown(wait=False, cancel_futures=True)

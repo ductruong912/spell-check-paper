@@ -1,18 +1,21 @@
-"""Hàm tiện ích xử lý văn bản."""
+"""Tiện ích xử lý và chuẩn hoá văn bản."""
+
 import re
 
 
 def normalize_text(text: str) -> str:
-    """Chuẩn hóa khoảng trắng trong văn bản."""
+    """Chuẩn hoá khoảng trắng cho hiển thị/lưu trữ."""
     return " ".join(text.split())
 
 
 def norm_ws(s: str) -> str:
-    """Chuẩn khoảng trắng để so sánh."""
+    """Chuẩn khoảng trắng để so sánh chuỗi."""
     return " ".join(s.strip().split())
 
 
-# Heading patterns for document structure detection
+# ----------------------------
+# Heading patterns (structure)
+# ----------------------------
 INTRO_HEADING = re.compile(
     r"^\s*([IVXLC]+\s*[\.\)]\s*)?(\d+(\.\d+)*)?\s*[:.\-–—]?\s*"
     r"(introduction|giới thiệu|đặt vấn đề|mở đầu)\b.*$",

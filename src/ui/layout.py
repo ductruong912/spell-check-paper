@@ -1,4 +1,4 @@
-"""Giao diện Streamlit cho phần kiểm tra cấu trúc và đạo văn."""
+"""UI Streamlit: hiển thị kết quả cấu trúc và đạo văn."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from typing import Any, Dict, List
 
 import streamlit as st
 
-# Add src to path
+# ----------------------------
+# Bootstrap import (add src to path)
+# ----------------------------
 root = Path(__file__).parent.parent
 if str(root) not in sys.path:
     sys.path.insert(0, str(root))
@@ -20,9 +22,9 @@ from utils.config import MAX_PLAGIARISM_FINDINGS_DISPLAY, PLAGIARISM_PREVIEW_LEN
 TARGET_LABELS = dict(TARGETS)
 
 
-# ─────────────────────────────────────────
+# ----------------------------
 # Helpers
-# ─────────────────────────────────────────
+# ----------------------------
 def _safe_float(x: Any, default: float = 0.0) -> float:
     try:
         return float(x)
@@ -43,6 +45,7 @@ def _overall_to_percent(overall_score: Any) -> float:
 
 
 def _extract_top_sources(fd: Dict[str, Any], k: int = 3) -> List[Dict[str, Any]]:
+    """Đọc top sources theo nhiều schema khác nhau."""
     top_sources = fd.get("top_sources")
     out: List[Dict[str, Any]] = []
 
@@ -52,22 +55,20 @@ def _extract_top_sources(fd: Dict[str, Any], k: int = 3) -> List[Dict[str, Any]]
                 continue
             title = (s.get("title") or "").strip() or "(Không có tiêu đề)"
             url = (s.get("url") or "").strip()
-            score = _safe_float(
-                s.get("score") or s.get("plagiat") or s.get("plagiarism") or 0.0, 0.0
-            )
+            score = _safe_float(s.get("score") or s.get("plagiat") or s.get("plagiarism") or 0.0, 0.0)
             if title or url:
                 out.append({"title": title, "url": url, "score": score})
         if out:
             return out
 
-    # Fallback: schema hiện tại trong checker của bạn
+    # Fallback: top_source_* fields
     url = (fd.get("top_source_url") or "").strip()
     title = (fd.get("top_source_title") or "").strip() or "Nguồn hàng đầu"
     score = _safe_float(fd.get("top_source_score") or 0.0, 0.0)
     if url or title:
         out.append({"title": title, "url": url, "score": score})
 
-    # Fallback 2: schema cũ (fd["top_source"] dict)
+    # Fallback: top_source dict
     top = fd.get("top_source")
     if isinstance(top, dict):
         title2 = (top.get("title") or "").strip() or "Nguồn hàng đầu"
@@ -104,9 +105,9 @@ def _render_sources_table(sources: List[Dict[str, Any]], *, key_prefix: str) -> 
                 st.button("Mở nguồn", disabled=True, use_container_width=True, key=btn_key)
 
 
-# ─────────────────────────────────────────
+# ----------------------------
 # Public render functions
-# ─────────────────────────────────────────
+# ----------------------------
 def render_plagiarism_section(plagiarism: Dict[str, Any]) -> None:
     if not plagiarism:
         return
@@ -132,9 +133,7 @@ def render_plagiarism_section(plagiarism: Dict[str, Any]) -> None:
         st.caption("Không có phần nào được kiểm tra.")
         return
 
-    # ✅ Main expander for all details
     with st.expander(f"Chi tiết ({len(findings)} phần đã kiểm tra)", expanded=True):
-        
         for i, fd in enumerate(findings[:MAX_PLAGIARISM_FINDINGS_DISPLAY], start=1):
             if not isinstance(fd, dict):
                 st.warning(f"Finding #{i} không hợp lệ.")
@@ -145,10 +144,9 @@ def render_plagiarism_section(plagiarism: Dict[str, Any]) -> None:
             sim = _safe_float(fd.get("similarity", 0.0), 0.0)
             key_prefix = f"plg_{chunk_index}_{i}"
 
-            # ✅ Each finding is a collapsible expander with scrollable content
             with st.expander(f"{i}. {label} — {_fmt_pct(sim, 2)}", expanded=(i == 1)):
-                # ✅ Fixed-height scrollable container
-                scrollable_html = f"""
+                # Container scrollable (HTML) để không kéo cả trang
+                scrollable_html = """
                 <div style="
                     max-height: 500px;
                     overflow-y: auto;
@@ -158,16 +156,19 @@ def render_plagiarism_section(plagiarism: Dict[str, Any]) -> None:
                     background: rgba(0,0,0,0.2);
                 ">
                 """
-                
+
                 report_link = (fd.get("report_link") or "").strip()
                 if report_link:
-                    scrollable_html += f'<p><a href="{report_link}" target="_blank" style="color: #0099ff; text-decoration: none;"><strong>🔗 Xem báo cáo (PlagiarismSearch)</strong></a></p>'
+                    scrollable_html += (
+                        f'<p><a href="{report_link}" target="_blank" '
+                        f'style="color: #0099ff; text-decoration: none;">'
+                        f"<strong>🔗 Xem báo cáo (PlagiarismSearch)</strong></a></p>"
+                    )
                 else:
                     scrollable_html += '<p style="color: #999;">Không có link báo cáo.</p>'
 
                 scrollable_html += '<p style="margin-top: 12px; margin-bottom: 8px;"><strong>Nguồn nghi ngờ:</strong></p>'
-                
-                # Add sources table
+
                 sources = _extract_top_sources(fd, k=3)
                 if sources:
                     scrollable_html += '<table style="width: 100%; border-collapse: collapse;">'
@@ -175,31 +176,44 @@ def render_plagiarism_section(plagiarism: Dict[str, Any]) -> None:
                         title = (s.get("title") or "").strip() or "(Không có tiêu đề)"
                         url = (s.get("url") or "").strip()
                         score = _safe_float(s.get("score"), 0.0)
-                        
-                        # Display shortened URL text but link to full URL
+
                         if url:
                             url_display = url[:70] + "..." if len(url) > 70 else url
-                            url_link = f'<a href="{url}" target="_blank" style="color: #0099ff; text-decoration: none;">{url_display}</a>'
+                            url_link = (
+                                f'<a href="{url}" target="_blank" '
+                                f'style="color: #0099ff; text-decoration: none;">{url_display}</a>'
+                            )
                         else:
                             url_link = "(Không có URL)"
-                        
-                        scrollable_html += f'<tr style="border-bottom: 1px solid rgba(255,255,255,0.1);"><td style="padding: 8px; width: 70%;"><strong>{idx}. {title}</strong><br/><span style="font-size: 12px; color: #999;">{url_link}</span></td><td style="padding: 8px; text-align: center;">{_fmt_pct(score, 2)}</td></tr>'
-                    scrollable_html += '</table>'
+
+                        scrollable_html += (
+                            '<tr style="border-bottom: 1px solid rgba(255,255,255,0.1);">'
+                            f'<td style="padding: 8px; width: 70%;">'
+                            f"<strong>{idx}. {title}</strong><br/>"
+                            f'<span style="font-size: 12px; color: #999;">{url_link}</span>'
+                            "</td>"
+                            f'<td style="padding: 8px; text-align: center;">{_fmt_pct(score, 2)}</td>'
+                            "</tr>"
+                        )
+                    scrollable_html += "</table>"
                 else:
                     scrollable_html += '<p style="color: #999;">Không có nguồn để hiển thị.</p>'
 
                 preview = (fd.get("text") or "").strip()
                 if preview:
-                    scrollable_html += f'<p style="margin-top: 12px; margin-bottom: 8px;"><strong>Đoạn kiểm tra (preview):</strong></p>'
+                    scrollable_html += '<p style="margin-top: 12px; margin-bottom: 8px;"><strong>Đoạn kiểm tra (preview):</strong></p>'
                     preview_text = preview[:PLAGIARISM_PREVIEW_LENGTH] + ("..." if len(preview) > PLAGIARISM_PREVIEW_LENGTH else "")
-                    # Escape HTML in preview
                     preview_text = html.escape(preview_text)
-                    scrollable_html += f'<pre style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 13px; line-height: 1.5;">{preview_text}</pre>'
+                    scrollable_html += (
+                        "<pre style="
+                        '"background: rgba(0,0,0,0.3); padding: 10px; border-radius: 4px; '
+                        'overflow-x: auto; font-size: 13px; line-height: 1.5;">'
+                        f"{preview_text}</pre>"
+                    )
                 else:
                     scrollable_html += '<p style="color: #999;">Không có preview.</p>'
 
-                scrollable_html += '</div>'
-                
+                scrollable_html += "</div>"
                 st.markdown(scrollable_html, unsafe_allow_html=True)
 
 

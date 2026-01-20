@@ -17,8 +17,7 @@ REF_MIN_RUN_LENGTH = 6
 # Helpers
 # ----------------------------
 def _normalize_for_heading(s: str) -> str:
-    """Chuẩn hoá dòng để so khớp heading ổn định (NFC, loại BOM/zw, lowercase).
-    """
+    """Chuẩn hoá dòng để so khớp heading ổn định."""
     if not s:
         return ""
     s = unicodedata.normalize("NFC", s)
@@ -30,24 +29,23 @@ def _normalize_for_heading(s: str) -> str:
 
 
 def _split_lines_with_offsets(text: str) -> List[Tuple[str, int, int]]:
-    """Tách văn bản thành các dòng kèm offset bắt đầu/kết thúc (ổn định cho \n và \r\n)."""
+    """Tách dòng kèm offset (ổn định cho \\n và \\r\\n)."""
     lines: List[Tuple[str, int, int]] = []
     i = 0
     for raw in text.splitlines(True):
         start = i
         i += len(raw)
         end = i
-        # remove trailing newline chars safely
         lines.append((raw.rstrip("\r\n"), start, end))
     return lines
 
+
 def _looks_like_heading(norm_line: str) -> bool:
+    """Heuristic: dòng ngắn, ít dấu câu, không giống câu văn."""
     if not norm_line:
         return False
     if len(norm_line) > 70:
         return False
-
-    # sentence-like end
     if norm_line.endswith("."):
         return False
 
@@ -55,16 +53,16 @@ def _looks_like_heading(norm_line: str) -> bool:
     if punct >= 2:
         return False
 
-    # too many words => likely a sentence
     if len(norm_line.split()) > 8:
         return False
 
     return True
 
+
 # ----------------------------
 # Phát hiện heading (ổn định)
 # ----------------------------
-# So khớp heading dựa trên dòng đã chuẩn hoá thay vì dò dấu thanh dễ lỗi.
+# Keyword heading "Tài liệu tham khảo/References" (có thể mất dấu).
 REF_HEADING_KEYWORDS = {
     "references",
     "reference",
@@ -72,41 +70,32 @@ REF_HEADING_KEYWORDS = {
     "works cited",
     "works-cited",
     "tài liệu tham khảo",
-    "tai lieu tham khao",  # in case accents got lost
+    "tai lieu tham khao",
     "tài liệu tham khảo và trích dẫn",
     "tai lieu tham khao va trich dan",
     "tài liệu trích dẫn",
     "tai lieu trich dan",
 }
 
-# Some journals write headings with numbering like "6. References"
+# Hỗ trợ heading có số thứ tự: "6. References"
 REF_HEADING_PREFIX_RE = re.compile(r"^\s*(\d{1,2}\s*[\.\)]\s*)?(.*)$")
 
 
 def _is_reference_heading(line: str) -> bool:
-    """Kiểm tra xem dòng có phải heading 'tài liệu tham khảo' hay không."""
+    """True nếu dòng là heading phần tham khảo."""
     raw = line or ""
-    # Strip common trailing punctuation
     norm = _normalize_for_heading(raw)
     norm = norm.strip(":;.-–— ").strip()
 
-    # remove numbering prefix "6. " or "IV. " style? We cover only digit prefix to keep safe.
     m = REF_HEADING_PREFIX_RE.match(norm)
-    if m:
-        norm2 = (m.group(2) or "").strip(":;.-–— ").strip()
-    else:
-        norm2 = norm
+    norm2 = (m.group(2) or "").strip(":;.-–— ").strip() if m else norm
 
-    # exact match to known keywords
     if norm2 in REF_HEADING_KEYWORDS:
         return True
 
-    # containment-based match (an toàn: yêu cầu dòng ngắn đủ để là heading)
-    # Ví dụ: "tài liệu tham khảo (references)"
     for kw in REF_HEADING_KEYWORDS:
-        if kw in norm2:
-            if _looks_like_heading(norm2):
-                return True
+        if kw in norm2 and _looks_like_heading(norm2):
+            return True
 
     return False
 
@@ -124,14 +113,13 @@ AUTHOR_RE = re.compile(r"\b[A-Z][a-z]+,\s*[A-Z]\.")
 
 
 def _line_reference_score(line: str) -> int:
-    """Calculate a heuristic score for how reference-like a line appears."""
+    """Chấm điểm dòng có “mùi” tài liệu tham khảo."""
     s = (line or "").strip()
     if not s:
         return 0
 
     score = 0
 
-    # Strong signals
     if DOI_RE.search(s):
         score += 3
     if URL_RE.search(s):
@@ -139,7 +127,6 @@ def _line_reference_score(line: str) -> int:
     if YEAR_RE.search(s):
         score += 2
 
-    # Formatting signals
     punct = sum(1 for ch in s if ch in ".,;:()[]")
     if punct >= 6:
         score += 2
@@ -150,7 +137,6 @@ def _line_reference_score(line: str) -> int:
     if INITIALS_RE.search(s) or AUTHOR_RE.search(s):
         score += 2
 
-    # Penalize very short lines (avoid false positives from footers)
     if len(s) < 18:
         score = max(0, score - 1)
 
@@ -158,22 +144,19 @@ def _line_reference_score(line: str) -> int:
 
 
 def find_references_span(text: str, tail_window: float = REF_TAIL_WINDOW) -> Optional[Tuple[int, int]]:
-    """Tìm span (start,end) của phần tham khảo.
-    Chiến lược: 1) tìm heading rõ ràng; 2) nếu không, quét tail để tìm hàng liên tiếp giống tham khảo.
-    """
+    """Tìm (start,end) phần tham khảo: ưu tiên heading, fallback quét tail."""
     if not (text or "").strip():
         return None
 
     lines = _split_lines_with_offsets(text)
 
-    # 1) Explicit heading detection
+    # 1) Heading rõ ràng
     for idx, (line, start, _end) in enumerate(lines):
         if _is_reference_heading(line):
-            # start after the heading line
             start_off = lines[idx + 1][1] if idx + 1 < len(lines) else start
             return (start_off, len(text))
 
-    # 2) Tail heuristic detection (tolerate small gaps)
+    # 2) Quét đoạn cuối (run + cho phép gap nhỏ)
     n = len(lines)
     if n == 0:
         return None
@@ -207,7 +190,6 @@ def find_references_span(text: str, tail_window: float = REF_TAIL_WINDOW) -> Opt
                 best_run_len = run_len
                 best_run_start = run_start
         else:
-            # allow gaps (blank line / wrapped continuation / separator)
             if run_start is not None:
                 gaps += 1
                 if gaps > GAP_ALLOW:
@@ -220,9 +202,8 @@ def find_references_span(text: str, tail_window: float = REF_TAIL_WINDOW) -> Opt
         return (start_off, len(text))
 
 
-
 def truncate_at(text: str, span: Optional[Tuple[int, int]]) -> str:
-    """Cắt văn bản tại span (loại bỏ phần tham khảo)"""
+    """Cắt phần từ span.start trở đi (loại tham khảo)."""
     if not span:
         return text
     a, _b = span

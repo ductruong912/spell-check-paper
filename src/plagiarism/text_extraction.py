@@ -1,4 +1,4 @@
-"""Hàm trích xuất văn bản từ tài liệu DOCX."""
+"""Trích xuất phần thân và tài liệu tham khảo từ DOCX (phục vụ check đạo văn)."""
 
 from __future__ import annotations
 from typing import List
@@ -7,8 +7,11 @@ from docx import Document
 from utils.text_utils import INTRO_HEADING, REF_HEADING
 
 
+# ----------------------------
+# Low-level helpers
+# ----------------------------
 def _docx_paragraph_texts(path: str) -> List[str]:
-    """Trích xuất tất cả đoạn văn không rỗng từ DOCX."""
+    """Lấy toàn bộ paragraph không rỗng từ DOCX (theo thứ tự gốc)."""
     doc = Document(path)
     out: List[str] = []
     for p in doc.paragraphs:
@@ -18,8 +21,16 @@ def _docx_paragraph_texts(path: str) -> List[str]:
     return out
 
 
+# ----------------------------
+# Body extraction
+# ----------------------------
 def extract_body_text_from_docx(path: str) -> str:
-    """Lấy phần thân chính giữa introduction và references."""
+    """
+    Trích xuất phần thân bài:
+    - Ưu tiên lấy nội dung sau Introduction
+    - Dừng tại References
+    - Có fallback nếu không có Introduction
+    """
     paras = _docx_paragraph_texts(path)
     if not paras:
         return ""
@@ -31,6 +42,7 @@ def extract_body_text_from_docx(path: str) -> str:
     saw_ref = False
 
     for t in paras:
+        # Gặp References → dừng
         if REF_HEADING.search(t):
             saw_ref = True
             break
@@ -38,6 +50,7 @@ def extract_body_text_from_docx(path: str) -> str:
         pre_ref_buf.append(t)
 
         if not started:
+            # Bắt đầu thân bài khi gặp Introduction
             if INTRO_HEADING.search(t):
                 started = True
                 continue
@@ -46,7 +59,7 @@ def extract_body_text_from_docx(path: str) -> str:
 
     body = "\n".join(body_buf).strip()
 
-    # fallback: nếu không có introduction -> lấy hết trước references (hoặc full nếu không có ref)
+    # Fallback: không có Introduction
     if not body:
         if saw_ref and pre_ref_buf:
             return "\n".join(pre_ref_buf).strip()
@@ -55,8 +68,14 @@ def extract_body_text_from_docx(path: str) -> str:
     return body
 
 
+# ----------------------------
+# References extraction
+# ----------------------------
 def extract_references_text_from_docx(path: str) -> str:
-    """Lấy phần tài liệu tham khảo từ DOCX."""
+    """
+    Trích xuất phần tài liệu tham khảo (sau heading References).
+    Dùng cho check riêng hoặc loại trừ khi cần.
+    """
     paras = _docx_paragraph_texts(path)
     if not paras:
         return ""
@@ -69,9 +88,7 @@ def extract_references_text_from_docx(path: str) -> str:
             in_refs = True
             continue
 
-        if in_refs:
-            # Only collect non-empty reference lines
-            if t.strip():
-                ref_buf.append(t)
+        if in_refs and t.strip():
+            ref_buf.append(t)
 
     return "\n".join(ref_buf).strip()

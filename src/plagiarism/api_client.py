@@ -1,4 +1,4 @@
-"""Client PlagiarismSearch: gửi văn bản và lấy báo cáo đạo văn."""
+"""Client PlagiarismSearch: gửi text và lấy báo cáo đạo văn."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ logger = logging.getLogger("plagiarism_checker")
 
 
 def _require_creds() -> Tuple[str, str]:
-    """Kiểm tra và trả về credentials PlagiarismSearch từ môi trường."""
+    """Validate creds và trả (user, key)."""
     is_valid, api_user, api_key, error_msg = validate_plagiarism_api_credentials()
     if not is_valid:
         raise APIValidationError(error_msg, f"PlagiarismSearch API validation failed: {error_msg}")
@@ -32,17 +32,13 @@ def _require_creds() -> Tuple[str, str]:
 
 @dataclass
 class CreateResult:
-    """Kết quả khi tạo báo cáo đạo văn (id và raw response)."""
+    """Kết quả create report (report_id + raw response)."""
     report_id: int
     raw: dict
 
 
 class PlagiarismSearchClient:
-    """Khách hàng tương tác với API PlagiarismSearch.
-
-    Lưu ý: requests.Session KHÔNG thread-safe.
-    Nếu chạy song song, hãy tạo 1 client/Session cho mỗi worker.
-    """
+    """Client gọi PlagiarismSearch API (mỗi worker nên dùng 1 Session)."""
 
     def __init__(self, user: str, key: str, session: Optional[requests.Session] = None) -> None:
         self.auth = HTTPBasicAuth(user, key)
@@ -51,7 +47,7 @@ class PlagiarismSearchClient:
     @rate_limit(plagiarism_limiter)
     @retry_with_backoff(max_retries=3, initial_delay=2.0)
     def create_report(self, text: str, remote_id: str, payload_extra: Optional[dict] = None) -> CreateResult:
-        """Tạo báo cáo đạo văn mới (gửi text tới API)."""
+        """Tạo report mới từ text."""
         word_count = len(text.split()) if text else 0
         if word_count > MAX_WORDS_PER_SUBMISSION:
             raise ValueError(
@@ -91,6 +87,7 @@ class PlagiarismSearchClient:
     @rate_limit(plagiarism_limiter)
     @retry_with_backoff(max_retries=3, initial_delay=2.0)
     def get_report(self, report_id: int, show_relations: int = -2) -> dict:
+        """Lấy report theo id."""
         url = f"{BASE_URL}/reports/{report_id}"
         params = {"show_relations": show_relations}
         r = self.sess.get(url, params=params, auth=self.auth, timeout=60)
@@ -104,7 +101,7 @@ class PlagiarismSearchClient:
         poll_s: float = 5.0,
         show_relations: int = -2,
     ) -> dict:
-        """Đợi đến khi báo cáo được xử lý xong hoặc timeout."""
+        """Poll đến khi status=checked hoặc timeout."""
         t0 = time.time()
         poll_count = 0
         last_status = None
@@ -123,7 +120,11 @@ class PlagiarismSearchClient:
                 elapsed = int(time.time() - t0)
                 logger.info(
                     "POLL id=%s status=%s progress=%s (poll=%d, elapsed=%ds)",
-                    report_id, status_label, progress, poll_count, elapsed
+                    report_id,
+                    status_label,
+                    progress,
+                    poll_count,
+                    elapsed,
                 )
                 last_status = status_label
                 last_progress = progress

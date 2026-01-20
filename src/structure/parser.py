@@ -1,5 +1,5 @@
-"""Phân tích DOCX và trích xuất cấu trúc bài báo.
-"""
+"""Parse DOCX và dựng view gọn để LLM nhận diện cấu trúc."""
+
 from __future__ import annotations
 
 import re
@@ -8,9 +8,9 @@ from typing import List, Optional, Tuple
 
 from docx import Document
 
-# -----------------------------
+# ----------------------------
 # Models
-# -----------------------------
+# ----------------------------
 @dataclass
 class DocPara:
     text: str
@@ -26,17 +26,16 @@ class DocSection:
 
 @dataclass
 class LLMDocView:
-
     view_text: str
     tail_text: str
     section_count: int
 
 
-# -----------------------------
+# ----------------------------
 # Utilities
-# -----------------------------
+# ----------------------------
 def _norm_ws(s: str) -> str:
-    """Chuẩn hóa khoảng trắng trong văn bản."""
+    """Chuẩn hoá whitespace để so khớp/hiển thị ổn định."""
     s = (s or "").replace("\u00A0", " ")
     s = re.sub(r"[ \t]+", " ", s).strip()
     s = re.sub(r"\n{3,}", "\n\n", s).strip()
@@ -44,7 +43,7 @@ def _norm_ws(s: str) -> str:
 
 
 def _collect_header_footer_text(doc: Document) -> set[str]:
-    """Lấy tất cả văn bản trong header và footer (nỗ lực tốt nhất)."""
+    """Lấy text header/footer để loại khỏi body (best-effort)."""
     hf_texts: set[str] = set()
     try:
         for sec in doc.sections:
@@ -57,7 +56,6 @@ def _collect_header_footer_text(doc: Document) -> set[str]:
                 if t:
                     hf_texts.add(t)
     except Exception:
-        # Lấy header/footer là nỗ lực tốt nhất, không gây lỗi nếu thất bại
         pass
     return hf_texts
 
@@ -67,7 +65,7 @@ _HEADING_STYLE_RE = re.compile(r"^(heading|tiêu đề|tieu de)\s+(\d+)\s*$", re
 
 
 def _heading_level_from_style(style_name: str) -> int:
-    """Lấy mức heading từ tên style (vd. 'Heading 1' -> 1)."""
+    """Map style name -> heading level (Heading 1 -> 1)."""
     s = (style_name or "").strip()
     m = _HEADING_STYLE_RE.match(s)
     if not m:
@@ -79,7 +77,7 @@ def _heading_level_from_style(style_name: str) -> int:
 
 
 def extract_docx_paragraphs(path: str) -> List[DocPara]:
-    """Trích xuất đoạn văn từ DOCX kèm style và mức heading."""
+    """Đọc DOCX -> list paragraph kèm style + heading_level."""
     doc = Document(path)
     hf_texts = _collect_header_footer_text(doc)
 
@@ -100,47 +98,43 @@ def extract_docx_paragraphs(path: str) -> List[DocPara]:
         out.append(DocPara(text=t, style=style_name, heading_level=lvl))
 
     return out
-# -----------------------------
+
+
+# ----------------------------
 # Hybrid splitting (recommended for product)
-# -----------------------------
-# Phát hiện heading đánh số như: "1. Introduction", "I. METHODS", "CHƯƠNG 1 ..."
+# ----------------------------
+# Heading đánh số/roman/chương: "1. ...", "I. ...", "CHƯƠNG 1 ..."
 _HEADING_LIKE_RE = re.compile(
     r"^\s*((\d+(\.\d+)*)|[IVXLC]+)\s*[\).\:-]\s+.+$|^(chương|chapter)\s+\d+",
     re.IGNORECASE,
 )
 
-# Phát hiện anchor phổ biến (VI + EN) dùng làm heading
+# Anchor heading hay gặp (VI + EN)
 _ANCHOR_RE = re.compile(
     r"^(tóm tắt|abstract|từ khóa|tu khoa|keywords|giới thiệu|introduction|"
-
     r"phương pháp|methods|materials and methods|kết quả|results|thảo luận|discussion|"
-
     r"kết luận|conclusion|tài liệu tham khảo|tai lieu tham khao|references|bibliography|"
-
     r"phụ lục|appendix|lời cảm ơn|acknowledgements|contribution|contributions|"
-
     r"conflict of interest|mâu thuẫn lợi ích)\b",
     re.IGNORECASE,
 )
 
 
 def _looks_like_heading(text: str, *, allow_weak: bool = True) -> bool:
+    """Heuristic heading: anchor/đánh số mạnh, hoặc line ngắn IN HOA (weak)."""
     t = (text or "").strip()
     if not t:
         return False
 
-    # Too long -> unlikely a heading
     if len(t) > 140:
         return False
 
-    # Strong signals
     if _ANCHOR_RE.match(t) or _HEADING_LIKE_RE.match(t):
         return True
 
     if not allow_weak:
         return False
 
-    # Weak signals: short line, low punctuation, high uppercase ratio
     words = t.split()
     if 1 <= len(words) <= 12:
         punct = sum(1 for ch in t if ch in ".,;:!?")
@@ -172,7 +166,7 @@ def split_by_structure(paras: List[DocPara]) -> Tuple[str, List[DocSection]]:
         cur_buf = []
 
     for p in paras:
-        # (Heading 1 / anchor / đánh số). Tránh cắt nhầm tiêu đề IN HOA.
+        # Boundary: Heading1 hoặc heading-like (sau khi đã thấy boundary đầu)
         is_boundary = (p.heading_level == 1) or _looks_like_heading(p.text, allow_weak=seen_boundary)
 
         if is_boundary:
@@ -186,7 +180,7 @@ def split_by_structure(paras: List[DocPara]) -> Tuple[str, List[DocSection]]:
             front_buf.append(p.text)
         else:
             if cur_heading is not None:
-                # Keep existing behavior: embed H2/H3 into content
+                # Giữ H2/H3 như subheading trong content
                 if p.heading_level >= 2:
                     cur_buf.append(f"## {p.text}")
                 else:
@@ -196,9 +190,9 @@ def split_by_structure(paras: List[DocPara]) -> Tuple[str, List[DocSection]]:
     return _norm_ws("\n".join(front_buf)), sections
 
 
-# -----------------------------
+# ----------------------------
 # LLM view builder (new)
-# -----------------------------
+# ----------------------------
 def build_llm_view(
     paras: List[DocPara],
     *,
@@ -207,23 +201,24 @@ def build_llm_view(
     max_sections: int = 28,
     max_section_chars: int = 1200,
 ) -> LLMDocView:
+    """Dựng view [FRONT]/[OUTLINE]/[TAIL] để giảm token mà vẫn đủ evidence."""
     if not paras:
         return LLMDocView(view_text="", tail_text="", section_count=0)
 
-    # FRONT/TAIL by paragraph windows.
+    # FRONT/TAIL theo cửa sổ paragraph
     n = len(paras)
     if n <= (max_front_paras + max_tail_paras):
         front_end = min(max_front_paras, max(1, n // 2))
     else:
         front_end = min(n, max_front_paras)
 
-    # Tail luôn ưu tiên lấy phần cuối. Nếu tài liệu ngắn, tail_start=front_end (không trùng).
+    # Tail ưu tiên phần cuối; tránh trùng với front
     tail_start = max(front_end, n - max(1, max_tail_paras))
 
     front_text = _norm_ws("\n".join(p.text for p in paras[:front_end]))
     tail_text = _norm_ws("\n".join(p.text for p in paras[tail_start:]))
 
-    # OUTLINE by hybrid split (helps the model infer missing headings)
+    # OUTLINE từ split hybrid (heading + snippet)
     _front_unused, sections = split_by_structure(paras)
     outline_lines: List[str] = []
     for i, sec in enumerate(sections[: max(1, max_sections)]):

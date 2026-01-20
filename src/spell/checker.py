@@ -6,6 +6,7 @@ from .reference_finder import find_references_span
 
 
 def _normalize_text(text: str) -> str:
+    """Chuẩn hoá text để offset ổn định (NFC, bỏ BOM/zero-width)."""
     if not text:
         return ""
     t = unicodedata.normalize("NFC", text)
@@ -15,7 +16,7 @@ def _normalize_text(text: str) -> str:
 
 
 def _clamp_span(span: Optional[Tuple[int, int]], text_len: int) -> Optional[Tuple[int, int]]:
-    """Đảm bảo ref_span không vượt biên sau normalize."""
+    """Clamp ref_span vào biên [0, text_len]."""
     if not span:
         return None
     a, b = span
@@ -27,6 +28,7 @@ def _clamp_span(span: Optional[Tuple[int, int]], text_len: int) -> Optional[Tupl
 
 
 def spellcheck_auto(text: str, ref_span: Optional[Tuple[int, int]] = None) -> Dict:
+    """Normalize text + ref_span rồi chạy spellcheck chính."""
     norm_text = _normalize_text(text)
 
     if ref_span is None:

@@ -41,12 +41,12 @@ VIETNAMESE_CHARS = (
     "ỲÝỶỸỴĐ"
 )
 
-# Vietnamese words (letters only) - for heuristic scan
-# Now matches tone marks ASCII (backtick, tilde, question, apostrophe) mixed in
-# EXCLUDES period (.) as it's a sentence punctuation, not a tone mark error
-VI_WORD_RE = re.compile(r"[A-Za-z" + re.escape(VIETNAMESE_CHARS) + r"]+(?:[`~?']*[A-Za-z" + re.escape(VIETNAMESE_CHARS) + r"]*)*[`~?']*")
+# Token VN (cho scan heuristic): cho phép dính dấu ASCII kiểu ` ~ ? '
+VI_WORD_RE = re.compile(
+    r"[A-Za-z" + re.escape(VIETNAMESE_CHARS) + r"]+(?:[`~?']*[A-Za-z" + re.escape(VIETNAMESE_CHARS) + r"]*)*[`~?']*"
+)
 
-# Unicode-aware token regex (prevents partial matches inside Vietnamese diacritics words)
+# Token chữ cái (Unicode-aware), hỗ trợ nối bằng - hoặc '
 WORD_RE = re.compile(
     r"[A-Za-z"
     + re.escape(VIETNAMESE_CHARS)
@@ -55,39 +55,16 @@ WORD_RE = re.compile(
     + r"]+)*"
 )
 
-# ASCII glued word candidate (very likely VN missing spaces/tones)
+# Token ASCII dài bất thường (hay gặp khi thiếu dấu/thiếu khoảng trắng)
 ASCII_LOWER_WORD_RE = re.compile(r"\b[a-z]{10,}\b")
 
 STOPWORDS = {
-    "the",
-    "a",
-    "an",
-    "in",
-    "of",
-    "to",
-    "and",
-    "or",
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "been",
-    "with",
-    "for",
-    "on",
-    "at",
-    "by",
-    "from",
-    "as",
-    "it",
-    "this",
-    "that",
-    "these",
-    "those",
+    "the", "a", "an", "in", "of", "to", "and", "or", "is", "are", "was", "were",
+    "be", "been", "with", "for", "on", "at", "by", "from", "as", "it", "this",
+    "that", "these", "those",
 }
 
-# A tiny allowlist of common English long words to avoid false positives for vn_glued
+# Allowlist vài từ tiếng Anh dài để giảm false-positive
 EN_LONG_ALLOWLIST = {
     "international",
     "technology",
@@ -130,7 +107,7 @@ URL_RE = re.compile(r"\bhttps?://\S+|\bwww\.\S+", re.I)
 CITATION_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 ETAL_RE = re.compile(r"\bet\s+al\b", re.I)
 
-# Vietnamese "core" letters that almost never appear in foreign proper names
+# Ký tự "rất Việt" để phân biệt với tên nước ngoài có dấu (Sánchez, García...)
 VN_CORE_CHARS = set("ăâêôơưđĂÂÊÔƠƯĐ")
 
 EN_SUFFIX_RE = re.compile(
@@ -139,32 +116,22 @@ EN_SUFFIX_RE = re.compile(
 )
 
 def _looks_like_english_shape(word: str) -> bool:
-    """
-    Heuristic: token trông giống tiếng Anh (để tránh bắn nhầm vi_glued_ascii).
-    Không cần perfect, chỉ cần giảm false positive.
-    """
+    """Heuristic nhanh: token có dáng tiếng Anh (giảm bắn nhầm vi_glued_ascii)."""
     w = (word or "").lower()
     if not re.fullmatch(r"[a-z]{6,}", w):
         return False
 
-    # common English suffixes
     if EN_SUFFIX_RE.search(w):
         return True
 
-    # vowel-rich (English words usually have vowels regularly)
     vowels = sum(1 for ch in w if ch in "aeiouy")
     if vowels >= max(2, len(w) // 4):
         return True
 
-    # consonant clusters typical in English are OK; for VN-ascii, patterns like "ngh", "tr", "kh" appear
-    # We do NOT flag here; just a weak signal.
     return False
 
 def _in_citation_parentheses(text: str, start: int, end: int, window: int = 80) -> bool:
-    """
-    True nếu token nằm trong ngoặc (...) có chứa năm 19xx/20xx (citation).
-    Mục tiêu: bỏ qua (Sánchez et al., 2022), (Nguyen & Nguyen, 2024) v.v.
-    """
+    """Bỏ qua token nằm trong ngoặc (...) có năm (citation author-year)."""
     left = max(0, start - window)
     right = min(len(text), end + window)
     ctx = text[left:right]
@@ -179,11 +146,7 @@ def _in_citation_parentheses(text: str, start: int, end: int, window: int = 80) 
 
 
 def _looks_like_foreign_proper_name_with_accents(word: str) -> bool:
-    """
-    Tên riêng nước ngoài có dấu kiểu Latin (Sánchez, García, Frédéric...)
-    - Có dấu/diacritics (nằm trong VIETNAMESE_CHARS) nhưng
-    - KHÔNG có các ký tự tiếng Việt đặc trưng: ă â ê ô ơ ư đ
-    """
+    """Tên nước ngoài có dấu Latin nhưng không có ăâêôơưđ (vd: Sánchez, García)."""
     if not word or len(word) < 3:
         return False
     if not any(c in VIETNAMESE_CHARS for c in word):
@@ -193,13 +156,13 @@ def _looks_like_foreign_proper_name_with_accents(word: str) -> bool:
     return word[0].isupper()
 
 
-# letters+digits tokens often represent IDs/codes: FIBa21, GEMg31...
+# Token kiểu mã: có cả chữ và số (vd: GEMg31, FIBa21...)
 CODELIKE_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]+$")
-_HYPHENS = set("-‐-‒–—­")  # hyphen, non-breaking hyphen, en/em dash, soft hyphen
+_HYPHENS = set("---‒–—­")  # hyphen/dash variants + soft hyphen
 
 
 def _adjacent_to_digit(text: str, start: int, end: int) -> bool:
-    """True if the token is part of an alphanumeric code/formula like EuCl3, Tb3+, L8-BO."""
+    """True nếu token dính công thức/mã có số (vd: EuCl3, Tb3+, L8-BO)."""
     if start > 0 and text[start - 1].isdigit():
         return True
     if end < len(text) and text[end].isdigit():
@@ -225,6 +188,7 @@ class Issue:
 # Helpers
 # ----------------------------
 def _normalize_text(text: str) -> str:
+    """Chuẩn hoá NFC + bỏ BOM/ZW để offset ổn định."""
     t = unicodedata.normalize("NFC", text or "")
     t = t.replace("\ufeff", "").replace("\u200b", "")
     return t
@@ -245,6 +209,7 @@ def _engine_unavailable(message: str) -> List[Dict]:
 
 
 def _looks_like_sentence_start(text: str, idx: int) -> bool:
+    """Ước lượng idx có phải đầu câu không (để không skip Titlecase ở đầu câu)."""
     if idx <= 0:
         return True
     j = idx - 1
@@ -260,18 +225,13 @@ def _has_vi_chars(s: str) -> bool:
 
 
 def _has_mixed_tone_marks(word: str) -> bool:
-    """Check for ASCII tone marks (backtick, tilde, question, apostrophe).
-    Excludes period (.) which is normal sentence punctuation."""
+    """Có dấu ASCII kiểu ` ~ ? ' (nghi gõ nhầm Telex/VNI)."""
     ascii_tones = set("`~?'")
     return any(c in ascii_tones for c in word)
 
 
 def _looks_like_vn_glued_ascii(word: str) -> bool:
-    """
-    Detect long lowercase ASCII words that are suspicious in VN context:
-    - long lowercase ASCII tokens >= 10 chars
-    - not in allowlist of common English words
-    """
+    """Token ASCII thường (>=10), không nằm allowlist -> nghi VN thiếu dấu/dính từ."""
     if not ASCII_LOWER_WORD_RE.fullmatch(word or ""):
         return False
     wl = word.lower()
@@ -281,14 +241,14 @@ def _looks_like_vn_glued_ascii(word: str) -> bool:
 
 
 def _strip_diacritics(s: str) -> str:
-    """Remove combining marks; keep Vietnamese letter 'đ' intact."""
+    """Bỏ dấu (combining marks); giữ đ theo unicode normalize."""
     if not s:
         return s
     return "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
 
 
 def _has_repeated_run(word: str, run: int = 3) -> bool:
-    """True if any character repeats >= run times consecutively (OCR/PDF artifact)."""
+    """Nghi lỗi OCR: 1 ký tự lặp liên tiếp >= run."""
     if not word:
         return False
     w = word.lower()
@@ -296,59 +256,42 @@ def _has_repeated_run(word: str, run: int = 3) -> bool:
 
 
 def _is_nonsense_combination(word: str) -> bool:
-    """
-    Detect nonsense character combinations that likely don't exist in any language:
-    - All same character repeated: 'aaa', 'iii', 'ooo'
-    - Only consonants: 'bcdfg', 'qwrt', 'xyz'
-    - Mostly same vowel with rare structure: 'iiia', 'aaab'
-    - Vowel-consonant-vowel pattern with all same vowels: 'iai', 'eae'
-    """
+    """Bắt các tổ hợp 'rác' (aaa, bcdfg, iiia...) để tô vàng cảnh báo."""
     if not word or len(word) < 2:
         return False
-    
+
     w = word.lower()
-    
-    # Remove Vietnamese diacritics for this check
     w_base = _strip_diacritics(w)
-    
-    # Skip if very short
     if len(w_base) < 2:
         return False
-    
-    # All same character (aaa, iii, ooo, etc.)
+
     if len(set(w_base)) == 1:
         return True
-    
+
     vowels = set("aeiouy")
     consonants = set("bcdfghjklmnpqrstvwxz")
-    
-    # Only consonants (no vowels): 'bcdfg', 'xyz', 'qwrt'
+
     if all(c in consonants for c in w_base):
         return True
-    
-    # Detect patterns like 'iiia', 'aaab', 'ooox' (mostly repeated vowel + 1 consonant)
+
     if len(w_base) >= 3:
         char_counts = {}
         for c in w_base:
             char_counts[c] = char_counts.get(c, 0) + 1
-        
-        # If one character dominates >= 70% and it's a vowel
+
         max_char = max(char_counts, key=char_counts.get)
         max_count = char_counts[max_char]
-        
+
         if max_char in vowels and max_count >= len(w_base) * 0.7:
-            # Check that the rest are only 1-2 different characters
             other_chars = [c for c in char_counts if c != max_char]
-            if len(other_chars) <= 2:
-                # And those other chars shouldn't repeat much
-                if all(char_counts[c] <= 2 for c in other_chars):
-                    return True
-    
+            if len(other_chars) <= 2 and all(char_counts[c] <= 2 for c in other_chars):
+                return True
+
     return False
 
 
 def _is_hyphenation_fragment(text: str, start: int, end: int) -> bool:
-    """Phát hiện đoạn bị ngắt từ do xuống dòng/hyphen của nhà xuất bản."""
+    """Bỏ qua mảnh từ bị ngắt dòng bằng hyphen của nhà xuất bản."""
     if end < len(text) and text[end] in _HYPHENS:
         if end + 1 < len(text) and text[end + 1].isspace():
             return True
@@ -361,7 +304,7 @@ def _is_hyphenation_fragment(text: str, start: int, end: int) -> bool:
 
 
 def _is_acronymish(word: str) -> bool:
-    """Heuristic: chữ viết tắt/viết hoa hay gặp trong văn bản khoa học (vd. PSCs, EIPAs)."""
+    """Heuristic viết tắt khoa học (PSC, EIPAs, PSCs...)."""
     if not word:
         return False
     if len(word) <= 2 or len(word) > 16:
@@ -378,7 +321,7 @@ def _is_acronymish(word: str) -> bool:
 
 
 def _iter_hyphen_segments(token: str, base_offset: int) -> List[Tuple[int, int, str]]:
-    """Yield (start, length, segment) for a hyphenated token, preserving offsets."""
+    """Tách token theo dash/hyphen, giữ offset chuẩn."""
     out: List[Tuple[int, int, str]] = []
     seg_start = 0
     for i, ch in enumerate(token):
@@ -396,34 +339,11 @@ def _iter_hyphen_segments(token: str, base_offset: int) -> List[Tuple[int, int, 
 
 ALL_CONSONANTS_RE = re.compile(r"^[bcdfghjklmnpqrstvwxz]+$", re.I)
 
+# Một ít từ VN không dấu hay gặp (để tránh gửi Word COM)
 VN_ASCII_COMMON = {
-    "toan",
-    "sinh",
-    "trong",
-    "moi",
-    "quan",
-    "he",
-    "chuyen",
-    "doi",
-    "so",
-    "viet",
-    "nam",
-    "kinh",
-    "te",
-    "quan",
-    "ly",
-    "doanh",
-    "nghiep",
-    "nghien",
-    "cuu",
-    "tai",
-    "lieu",
-    "tham",
-    "khao",
-    "tom",
-    "tat",
-    "tu",
-    "khoa",
+    "toan", "sinh", "trong", "moi", "quan", "he", "chuyen", "doi", "so", "viet",
+    "nam", "kinh", "te", "quan", "ly", "doanh", "nghiep", "nghien", "cuu", "tai",
+    "lieu", "tham", "khao", "tom", "tat", "tu", "khoa",
 }
 
 _VN_VALID_CODAS = ("c", "ch", "m", "n", "ng", "nh", "p", "t")
@@ -431,11 +351,7 @@ _VN_VOWEL_BASES = set("aeiouy")
 
 
 def _ends_with_invalid_vn_coda(word: str) -> bool:
-    """
-    High-precision Vietnamese syllable sanity check:
-    - Only apply when the token contains Vietnamese diacritics or 'đ'
-    - Flag if it ends with an impossible coda
-    """
+    """Sanity-check VN: chỉ áp dụng khi có dấu/đ; flag nếu coda không thể xảy ra."""
     if not word:
         return False
     w = word.lower()
@@ -447,7 +363,6 @@ def _ends_with_invalid_vn_coda(word: str) -> bool:
         return False
 
     w = re.sub(r"[^\w" + re.escape(VIETNAMESE_CHARS) + r"]+$", "", w)
-
     if len(w) <= 2:
         return False
 
@@ -464,12 +379,7 @@ def _ends_with_invalid_vn_coda(word: str) -> bool:
 
 
 def _looks_like_english_word(w: str) -> bool:
-    """
-    Gate to send to Word COM:
-    - exclude tokens with Vietnamese diacritics or 'đ'
-    - exclude tokens adjacent to digits (chemical formulas etc)
-    - exclude obvious VN-ascii common words and consonant-only garbage
-    """
+    """Gate gửi Word COM: loại VN có dấu/đ, url/email/code, và token 'VN không dấu' phổ biến."""
     if not w:
         return False
 
@@ -497,10 +407,7 @@ def _looks_like_english_word(w: str) -> bool:
 
 
 def _build_line_vi_ratio_map(text: str) -> Tuple[List[int], List[float]]:
-    """
-    For each line, compute ratio of Vietnamese-diacritic letters among letters.
-    Used to skip Word COM on lines that are mostly Vietnamese.
-    """
+    """Tính tỷ lệ chữ VN theo từng dòng để giảm chi phí Word COM."""
     ends: List[int] = []
     ratios: List[float] = []
 
@@ -531,7 +438,7 @@ def _build_line_vi_ratio_map(text: str) -> Tuple[List[int], List[float]]:
 
 
 def _is_vietnamese_line(pos: int, line_ends: List[int], line_vi_ratio: List[float], threshold: float = 0.25) -> bool:
-    """Return True if the line containing `pos` is mostly Vietnamese."""
+    """True nếu dòng chứa pos có VN nhiều (ratio >= threshold)."""
     lo, hi = 0, len(line_ends) - 1
     while lo <= hi:
         mid = (lo + hi) // 2
@@ -544,10 +451,7 @@ def _is_vietnamese_line(pos: int, line_ends: List[int], line_vi_ratio: List[floa
 
 
 def _is_vietnamese_context(text: str, start: int, end: int, window: int = 40, threshold: float = 0.22) -> bool:
-    """
-    Context gate:
-    If around token there are many Vietnamese diacritics -> consider VN context.
-    """
+    """Gate theo ngữ cảnh: quanh token có nhiều chữ VN -> coi là VN context."""
     left = max(0, start - window)
     right = min(len(text), end + window)
     ctx = text[left:right]
@@ -559,10 +463,7 @@ def _is_vietnamese_context(text: str, start: int, end: int, window: int = 40, th
 
 
 def _batch_check_spelling_word_com(app, words: List[str]) -> Dict[str, Tuple[bool, List[str]]]:
-    """
-    Batch-check spelling with Word COM:
-    Return dict word_lower -> (is_correct, suggestions)
-    """
+    """Batch Word COM: word_lower -> (ok, suggestions)."""
     cache: Dict[str, Tuple[bool, List[str]]] = {}
     for w in words:
         ok = True
@@ -591,6 +492,7 @@ def _in_references(pos: int, ref_start: Optional[int]) -> bool:
 
 
 def _should_skip_word(word: str, text: str, match_pos: int) -> bool:
+    """Skip token chắc chắn không cần spellcheck (url/email/citation/acronym/proper-name...)."""
     wl = word.lower()
 
     if EMAIL_RE.search(word) or DOMAIN_RE.search(word) or URL_RE.search(word) or CODELIKE_RE.match(word):
@@ -622,21 +524,18 @@ def _should_skip_word(word: str, text: str, match_pos: int) -> bool:
 
 
 # ----------------------------
-# Token classifier (HIGH PRECISION for product)
+# Token classifier (ưu tiên precision)
 # ----------------------------
 def _token_kind(word: str, start: int, end: int, text: str, english_ok: Optional[Set[str]]) -> str:
     """
-    Return one of: 'vi', 'en', 'skip', 'unknown'
-    - skip: email/url/domain/code/acronym/proper noun/citation/foreign name
-    - vi: strong Vietnamese signals
-    - en: Word COM oracle says correct
+    Phân loại token: vi / en / skip / unknown.
+    Mục tiêu: chỉ chạy heuristic VN lên token không chắc là EN và không thuộc nhóm skip.
     """
     if not word:
         return "skip"
 
     wl = word.lower()
 
-    # hard skip
     if EMAIL_RE.search(word) or URL_RE.search(word) or DOMAIN_RE.search(word) or CODELIKE_RE.match(word):
         return "skip"
     if _in_citation_parentheses(text, start, end):
@@ -649,11 +548,9 @@ def _token_kind(word: str, start: int, end: int, text: str, english_ok: Optional
         if not _looks_like_sentence_start(text, start):
             return "skip"
 
-    # strong Vietnamese signals
     if ("đ" in wl) or any(c in VN_CORE_CHARS for c in word) or _has_vi_chars(word):
         return "vi"
 
-    # English oracle
     if english_ok is not None and wl in english_ok:
         return "en"
 
@@ -689,7 +586,7 @@ def spellcheck_vietnamese(
 
         kind = _token_kind(word, start, end, text, english_ok=english_ok)
 
-        # ✅ Do not run VN heuristics on English words or proper nouns/citation/etc.
+        # EN hoặc nhóm skip thì thôi, không tô vàng theo heuristic VN
         if kind in ("en", "skip"):
             continue
 
@@ -710,7 +607,7 @@ def spellcheck_vietnamese(
                     length=len(word),
                     original=word,
                     suggestions=[clean_word],
-                    message="Nghi ngờ gõ nhầm dấu kiểu Telex/VNI trong từ (ví dụ 'a`')",
+                    message="Nghi gõ nhầm dấu ASCII (Telex/VNI)",
                 )
             )
             issue_id += 1
@@ -725,19 +622,19 @@ def spellcheck_vietnamese(
                     length=len(word),
                     original=word,
                     suggestions=[],
-                    message="Nghi ngờ lỗi OCR/PDF: ký tự lặp nhiều lần trong từ",
+                    message="Nghi lỗi OCR: ký tự lặp nhiều lần",
                 )
             )
             issue_id += 1
             continue
 
         if _is_nonsense_combination(word):
-            # Skip if this word is part of an email or URL
+            # tránh bắt nhầm nếu nằm trong email/url quanh đó
             if EMAIL_RE.search(text[max(0, start - 50):end + 50]) or \
                URL_RE.search(text[max(0, start - 50):end + 50]) or \
                DOMAIN_RE.search(text[max(0, start - 50):end + 50]):
                 continue
-            
+
             issues.append(
                 Issue(
                     id=str(issue_id),
@@ -746,13 +643,13 @@ def spellcheck_vietnamese(
                     length=len(word),
                     original=word,
                     suggestions=[],
-                    message="Nghi ngờ tổ hợp ký tự lạ/không tồn tại (ví dụ 'iiia', 'bcdfg', 'aaa')",
+                    message="Nghi tổ hợp ký tự lạ/không hợp lệ",
                 )
             )
             issue_id += 1
             continue
 
-        # glued-ascii: only raise when VN context is strong (prevents flagging English terms in VN sentences)
+        # ASCII dài: chỉ raise khi ngữ cảnh xung quanh là VN
         if _looks_like_vn_glued_ascii(word):
             if _is_vietnamese_context(text, start, end, window=70, threshold=0.20):
                 if not _looks_like_english_shape(word):
@@ -764,13 +661,13 @@ def spellcheck_vietnamese(
                             length=len(word),
                             original=word,
                             suggestions=[],
-                            message="Nghi ngờ từ tiếng Việt bị dính/thiếu dấu (heuristic)",
+                            message="Nghi VN thiếu dấu/dính từ (heuristic)",
                         )
                     )
                     issue_id += 1
             continue
 
-        # OCR: a capital letter glued to a lower-case word like "BNgày"
+        # OCR: kiểu "BNgày"
         if len(word) >= 4 and word[0].isupper() and word[1].isupper() and word[2:].islower():
             issues.append(
                 Issue(
@@ -780,7 +677,7 @@ def spellcheck_vietnamese(
                     length=len(word),
                     original=word,
                     suggestions=[],
-                    message="Nghi ngờ lỗi OCR/PDF: chữ cái bị dính vào từ (ví dụ 'BNgày')",
+                    message="Nghi lỗi OCR: chữ cái bị dính",
                 )
             )
             issue_id += 1
@@ -795,7 +692,7 @@ def spellcheck_vietnamese(
                     length=len(word),
                     original=word,
                     suggestions=[],
-                    message="Nghi ngờ từ tiếng Việt kết thúc bằng phụ âm không hợp lệ",
+                    message="Nghi VN: phụ âm cuối không hợp lệ",
                 )
             )
             issue_id += 1
@@ -824,10 +721,9 @@ def spellcheck_english_with_word(text: str, ref_span: Optional[Tuple[int, int]] 
     line_ends, line_vi_ratio = _build_line_vi_ratio_map(text)
 
     if not WORD_AVAILABLE:
-        # No Word COM => still run VN heuristic, but without english_ok oracle
         vi_res = spellcheck_vietnamese(text, ref_span=ref_span, english_ok=None)
         return {
-            "issues": vi_res.get("issues", []) + _engine_unavailable("Word COM engine unavailable (win32com/pythoncom not installed)."),
+            "issues": vi_res.get("issues", []) + _engine_unavailable("Word COM không khả dụng (thiếu win32com/pythoncom)."),
             "total_words": total_words,
             "meta": {
                 "en_errors": 0,
@@ -854,38 +750,31 @@ def spellcheck_english_with_word(text: str, ref_span: Optional[Tuple[int, int]] 
         for m in WORD_RE.finditer(text):
             if _in_references(m.start(), ref_start):
                 continue
-
-            # Skip citation parentheses (author-year) to avoid checking names
             if _in_citation_parentheses(text, m.start(), m.end()):
                 continue
 
-            # If a whole line is strongly Vietnamese, we still allow EN terms,
-            # but avoid spending cost on short lowercase tokens.
             is_vn_line = _is_vietnamese_line(m.start(), line_ends, line_vi_ratio)
-
             w = m.group(0)
 
             segments = (
-                _iter_hyphen_segments(w, m.start()) if any(h in w for h in _HYPHENS) else [(m.start(), len(w), w)]
+                _iter_hyphen_segments(w, m.start())
+                if any(h in w for h in _HYPHENS)
+                else [(m.start(), len(w), w)]
             )
 
             for seg_start, seg_len, seg in segments:
                 if not seg:
                     continue
-
                 if _is_hyphenation_fragment(text, seg_start, seg_start + seg_len):
                     continue
-
                 if _adjacent_to_digit(text, seg_start, seg_start + seg_len):
                     continue
-
                 if _should_skip_word(seg, text, seg_start):
                     continue
-
                 if not _looks_like_english_word(seg):
                     continue
 
-                # ✅ Keep EN terms even inside VN lines, but skip noisy short lowercase in VN lines
+                # VN line: bỏ token lowercase ngắn để tiết kiệm (thường là VN không dấu)
                 if is_vn_line and seg.islower() and len(seg) <= 5:
                     continue
 
@@ -921,7 +810,6 @@ def spellcheck_english_with_word(text: str, ref_span: Optional[Tuple[int, int]] 
                     )
                     issue_id += 1
 
-        # ✅ Run Vietnamese heuristic AFTER we have english_ok oracle
         vi_res = spellcheck_vietnamese(text, ref_span=ref_span, english_ok=english_ok)
         issues_vi = [
             Issue(
@@ -954,7 +842,6 @@ def spellcheck_english_with_word(text: str, ref_span: Optional[Tuple[int, int]] 
 
     except Exception as e:
         log.exception(f"Error in Word COM spellcheck: {e}")
-        # even if Word fails, still give VI heuristic
         vi_res = spellcheck_vietnamese(text, ref_span=ref_span, english_ok=None)
         issues_en = _engine_unavailable(f"Word COM spellcheck failed: {e}")
         all_issues = vi_res.get("issues", []) + issues_en

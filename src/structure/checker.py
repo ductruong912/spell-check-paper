@@ -13,9 +13,9 @@ from .classifier import guess_references_style, llm_detect_structure
 logger = logging.getLogger("structure_checker")
 
 
-# ─────────────────────────────────────────
+# ----------------------------
 # Data structures
-# ─────────────────────────────────────────
+# ----------------------------
 @dataclass
 class SectionHit:
     status: str  # "ok" | "missing"
@@ -33,9 +33,9 @@ class Report:
     notes: List[str]
 
 
-# ─────────────────────────────────────────
+# ----------------------------
 # Targets / Required
-# ─────────────────────────────────────────
+# ----------------------------
 TARGETS = [
     ("title_vi", "Tiêu đề tiếng Việt"),
     ("title_en", "Tiêu đề tiếng Anh"),
@@ -83,11 +83,7 @@ def check_structure_docx(
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     parsed_paras: Optional[List[DocPara]] = None,
 ) -> Report:
-    """Kiểm tra cấu trúc bài báo (presence) bằng LLM.
-
-    Trả về Report với sections[*].status = ok/missing.
-    """
-
+    """Check presence các mục trong bài báo bằng LLM, trả về Report."""
     if not path or not isinstance(path, str):
         raise ValueError(f"Invalid path type: {type(path)}")
 
@@ -108,7 +104,7 @@ def check_structure_docx(
     if not paras:
         return Report(file=str(p), ok=False, sections=_init_hits(), notes=["Empty DOCX"])
 
-    # Build compact view for LLM
+    # Build view gọn để gửi LLM
     from utils.config import (
         LLM_VIEW_MAX_SECTIONS,
         LLM_VIEW_MAX_SECTION_CHARS,
@@ -132,7 +128,7 @@ def check_structure_docx(
     try:
         llm_out = llm_detect_structure(view_text=view.view_text, openai_model=openai_model)
     except Exception as e:
-        # Fail-safe: do not crash the whole app; return missing with notes
+        # Fail-safe: không làm sập app, trả missing + notes
         logger.exception("LLM detect_structure failed")
         notes.append(f"LLM error: {e}")
         required_ids = [k for k, v in REQUIRED.items() if v]
@@ -159,7 +155,7 @@ def check_structure_docx(
                 notes=reason,
             )
         else:
-            # Keep missing but preserve low-confidence hints for debugging/UI
+            # Missing nhưng vẫn giữ hint để debug/UI
             hits[key] = SectionHit(
                 status="missing",
                 evidence=evidence if present else "",
@@ -167,7 +163,7 @@ def check_structure_docx(
                 notes=reason,
             )
 
-    # References style (optional): keep it cheap and deterministic
+    # References style: ưu tiên LLM, fallback rule-based
     if hits.get("references") and hits["references"].status == "ok":
         style = references_style_llm.strip() or "Unknown"
         if style == "Unknown":

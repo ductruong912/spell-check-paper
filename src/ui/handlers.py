@@ -1,4 +1,4 @@
-"""Xử lý tác vụ song song: cấu trúc, chính tả, và đạo văn."""
+"""Chạy song song: cấu trúc, chính tả, đạo văn."""
 
 from __future__ import annotations
 
@@ -8,7 +8,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Thêm `src` vào `sys.path` để import backend
+# ----------------------------
+# Bootstrap import (add src to sys.path)
+# ----------------------------
 BASE_DIR = Path(__file__).parent.parent.parent.resolve()
 SRC_DIR = BASE_DIR / "src"
 if str(SRC_DIR) not in sys.path:
@@ -23,13 +25,15 @@ from utils.validation import get_user_friendly_error, APIValidationError
 
 logger = logging.getLogger(__name__)
 
-# Plagiarism index directory
+# ----------------------------
+# Paths
+# ----------------------------
 PLAG_INDEX_DIR = str(SRC_DIR / "plag_index")
 
 
-# ─────────────────────────────────────────
+# ----------------------------
 # Helpers
-# ─────────────────────────────────────────
+# ----------------------------
 def _safe_float(x: Any, default: float = 0.0) -> float:
     try:
         return float(x)
@@ -38,7 +42,7 @@ def _safe_float(x: Any, default: float = 0.0) -> float:
 
 
 def _top_sources_from_sources_list(sources: List[dict], k: int = 3) -> List[Dict[str, Any]]:
-    """Chuẩn hoá danh sách sources (nếu backend trả full sources list)."""
+    """Rank sources theo score, trả schema {title,url,score}."""
     if not sources:
         return []
 
@@ -57,16 +61,11 @@ def _top_sources_from_sources_list(sources: List[dict], k: int = 3) -> List[Dict
 
 
 def _normalize_finding(fd: Dict[str, Any], k: int = 3) -> Dict[str, Any]:
-    """
-    Chuẩn hoá mỗi finding để UI render ổn định:
-    - đảm bảo có top_sources: [{title,url,score}] (ưu tiên URL gốc)
-    - giữ lại report_link, similarity, text...
-    """
+    """Chuẩn hoá 1 finding để UI luôn có top_sources."""
     out = dict(fd or {})
 
-    # 1) Nếu finding đã có top_sources đúng schema thì giữ nguyên
+    # 1) top_sources chuẩn
     if isinstance(out.get("top_sources"), list) and out["top_sources"]:
-        # đảm bảo mỗi phần tử có title/url/score
         norm: List[Dict[str, Any]] = []
         for s in out["top_sources"][:k]:
             if not isinstance(s, dict):
@@ -82,13 +81,13 @@ def _normalize_finding(fd: Dict[str, Any], k: int = 3) -> Dict[str, Any]:
         out["top_sources"] = norm
         return out
 
-    # 2) Nếu backend trả full sources list trong finding
+    # 2) backend trả sources list đầy đủ
     sources = out.get("sources")
     if isinstance(sources, list) and sources:
         out["top_sources"] = _top_sources_from_sources_list(sources, k=k)
         return out
 
-    # 3) Fallback: các trường top_source_* (schema checker bạn đang dùng)
+    # 3) fallback: top_source_* fields
     url = (out.get("top_source_url") or "").strip()
     title = (out.get("top_source_title") or "").strip() or "Nguồn hàng đầu"
     score = _safe_float(out.get("top_source_score") or 0.0, 0.0)
@@ -96,7 +95,7 @@ def _normalize_finding(fd: Dict[str, Any], k: int = 3) -> Dict[str, Any]:
         out["top_sources"] = [{"title": title, "url": url, "score": score}]
         return out
 
-    # 4) Fallback: schema cũ layout trước đây dùng: out["top_source"] = dict
+    # 4) fallback: top_source dict
     top = out.get("top_source")
     if isinstance(top, dict):
         out["top_sources"] = [
@@ -108,13 +107,12 @@ def _normalize_finding(fd: Dict[str, Any], k: int = 3) -> Dict[str, Any]:
         ]
         return out
 
-    # 5) Không có gì thì để rỗng
     out["top_sources"] = []
     return out
 
 
 def _normalize_plagiarism_result(result: Dict[str, Any], k: int = 3) -> Dict[str, Any]:
-    """Chuẩn hoá toàn bộ kết quả đạo văn cho UI."""
+    """Chuẩn hoá output đạo văn để UI render ổn định."""
     if not isinstance(result, dict):
         return {"success": False, "overall_score": 0.0, "findings": [], "error": "Invalid plagiarism result"}
 
@@ -125,17 +123,17 @@ def _normalize_plagiarism_result(result: Dict[str, Any], k: int = 3) -> Dict[str
         findings = []
     out["findings"] = [_normalize_finding(fd, k=k) for fd in findings if isinstance(fd, dict)]
 
-    # overall_score: backend đang dùng 0..1, giữ nguyên cho UI (layout sẽ *100)
+    # overall_score backend đang dùng 0..1
     out["overall_score"] = _safe_float(out.get("overall_score") or 0.0, 0.0)
 
     return out
 
 
-# ─────────────────────────────────────────
+# ----------------------------
 # Public handlers
-# ─────────────────────────────────────────
+# ----------------------------
 def check_structure(file_path: str, doc_cache: DocumentCache) -> Dict[str, Any]:
-    """Kiểm tra cấu trúc dùng đoạn đã cache."""
+    """Check cấu trúc bằng paras đã cache."""
     try:
         report = check_structure_docx(file_path, parsed_paras=doc_cache.paras)
         return {
@@ -153,7 +151,7 @@ def check_structure(file_path: str, doc_cache: DocumentCache) -> Dict[str, Any]:
 
 
 def check_spell(doc_cache: DocumentCache) -> Dict[str, Any]:
-    """Kiểm tra chính tả dùng văn bản đã cache."""
+    """Check chính tả bằng text/ref_span đã cache."""
     try:
         result = spellcheck_auto(doc_cache.text, ref_span=doc_cache.ref_span)
 
@@ -197,7 +195,7 @@ def check_spell(doc_cache: DocumentCache) -> Dict[str, Any]:
 
 
 def check_plagiarism(file_path: str, doc_cache: DocumentCache) -> Dict[str, Any]:
-    """Kiểm tra đạo văn dùng đoạn đã cache. Chuẩn hoá output để UI mở nguồn bằng URL gốc."""
+    """Check đạo văn và chuẩn hoá output để UI mở đúng URL nguồn."""
     try:
         result = check_plagiarism_in_file(
             file_path,
@@ -210,7 +208,6 @@ def check_plagiarism(file_path: str, doc_cache: DocumentCache) -> Dict[str, Any]
             parsed_paras=doc_cache.paras,
         )
 
-        # normalize result -> UI-friendly
         normalized = _normalize_plagiarism_result(result or {}, k=3)
         normalized["success"] = True
         return normalized

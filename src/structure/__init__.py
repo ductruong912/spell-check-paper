@@ -1,5 +1,4 @@
-"""Module kiểm tra cấu trúc bài báo (LLM-first).
-"""
+"""Module kiểm tra cấu trúc bài báo (LLM-first)."""
 from .checker import check_structure_docx
 from .parser import extract_docx_paragraphs
 
