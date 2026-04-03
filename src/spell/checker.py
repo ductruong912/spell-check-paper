@@ -36,4 +36,4 @@ def spellcheck_auto(text: str, ref_span: Optional[Tuple[int, int]] = None) -> Di
     else:
         norm_ref_span = _clamp_span(ref_span, len(norm_text))
 
-    return spellcheck_english_with_word(norm_text, ref_span=norm_ref_span)
+    return spellcheck_english_with_word(norm_text, ref_span=norm_ref_span, is_normalized=True)

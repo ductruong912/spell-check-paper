@@ -1,6 +1,7 @@
 import re
 import unicodedata
 import logging
+from functools import lru_cache
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Tuple, Optional, Set
 
@@ -92,6 +93,36 @@ EN_LONG_ALLOWLIST = {
     "business",
     "strategy",
     "economics",
+    "methodology",
+    "organizational",
+    "entrepreneurship",
+    "digitalization",
+    "digitalisation",
+    "transformational",
+    "interdisciplinary",
+    "multidisciplinary",
+    "comparative",
+    "quantitative",
+    "qualitative",
+    "longitudinal",
+    "crosssectional",
+    "determinants",
+    "governance",
+    "productivity",
+    "performance",
+    "competitive",
+    "competitiveness",
+    "collaboration",
+    "coordination",
+    "implementation",
+    "optimization",
+    "optimisation",
+    "framework",
+    "stakeholder",
+    "socioeconomic",
+    "microfinance",
+    "cryptocurrency",
+    "blockchain",
 }
 
 # ----------------------------
@@ -247,12 +278,17 @@ def _strip_diacritics(s: str) -> str:
     return "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch) != "Mn")
 
 
+@lru_cache(maxsize=8)
+def _get_repeated_run_re(run: int):
+    safe_run = max(2, int(run or 2))
+    return re.compile(rf"(.)\1{{{safe_run - 1},}}")
+
+
 def _has_repeated_run(word: str, run: int = 3) -> bool:
     """Nghi lỗi OCR: 1 ký tự lặp liên tiếp >= run."""
     if not word:
         return False
-    w = word.lower()
-    return bool(re.search(r"(.)\1{" + str(run - 1) + r",}", w))
+    return bool(_get_repeated_run_re(run).search(word.lower()))
 
 
 def _is_nonsense_combination(word: str) -> bool:
@@ -272,7 +308,12 @@ def _is_nonsense_combination(word: str) -> bool:
     consonants = set("bcdfghjklmnpqrstvwxz")
 
     if all(c in consonants for c in w_base):
-        return True
+        # Tránh bắn nhầm EN consonant-cluster ngắn (ctrl, str, bldg...).
+        if len(w_base) <= 4:
+            return False
+        if _has_repeated_run(w_base, run=3):
+            return True
+        return len(w_base) >= 7
 
     if len(w_base) >= 3:
         char_counts = {}
@@ -406,84 +447,162 @@ def _looks_like_english_word(w: str) -> bool:
     return True
 
 
-def _build_line_vi_ratio_map(text: str) -> Tuple[List[int], List[float]]:
-    """Tính tỷ lệ chữ VN theo từng dòng để giảm chi phí Word COM."""
-    ends: List[int] = []
-    ratios: List[float] = []
-
-    start = 0
-    for i, ch in enumerate(text):
-        if ch == "\n":
-            line = text[start:i]
-            letters = [c for c in line if c.isalpha()]
-            if letters:
-                vi = sum(1 for c in letters if c in VIETNAMESE_CHARS or c.lower() == "đ")
-                ratios.append(vi / max(1, len(letters)))
-            else:
-                ratios.append(0.0)
-            ends.append(i)
-            start = i + 1
-
-    if start <= len(text):
-        line = text[start:]
-        letters = [c for c in line if c.isalpha()]
-        if letters:
-            vi = sum(1 for c in letters if c in VIETNAMESE_CHARS or c.lower() == "đ")
-            ratios.append(vi / max(1, len(letters)))
-        else:
-            ratios.append(0.0)
-        ends.append(len(text))
-
-    return ends, ratios
+VI_CONTEXT_WINDOW = 120
+VI_CONTEXT_STRONG_THRESHOLD = 0.5
+VI_CONTEXT_MIXED_THRESHOLD = 0.2
 
 
-def _is_vietnamese_line(pos: int, line_ends: List[int], line_vi_ratio: List[float], threshold: float = 0.25) -> bool:
-    """True nếu dòng chứa pos có VN nhiều (ratio >= threshold)."""
-    lo, hi = 0, len(line_ends) - 1
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        if pos <= line_ends[mid]:
-            hi = mid - 1
-        else:
-            lo = mid + 1
-    idx = max(0, min(lo, len(line_vi_ratio) - 1))
-    return line_vi_ratio[idx] >= threshold
-
-
-def _is_vietnamese_context(text: str, start: int, end: int, window: int = 40, threshold: float = 0.22) -> bool:
-    """Gate theo ngữ cảnh: quanh token có nhiều chữ VN -> coi là VN context."""
-    left = max(0, start - window)
-    right = min(len(text), end + window)
+def _vi_ratio_around(text: str, pos: int, window: int = VI_CONTEXT_WINDOW) -> float:
+    """Tỷ lệ VN chars trong vùng ±window quanh vị trí token."""
+    left = max(0, pos - window)
+    right = min(len(text), pos + window)
     ctx = text[left:right]
-    letters = [c for c in ctx if c.isalpha()]
-    if not letters:
-        return False
-    vi = sum(1 for c in letters if c in VIETNAMESE_CHARS or c.lower() == "đ")
-    return (vi / max(1, len(letters))) >= threshold
+    letters = 0
+    vi = 0
+    for c in ctx:
+        if not c.isalpha():
+            continue
+        letters += 1
+        if c in VIETNAMESE_CHARS or c.lower() == "đ":
+            vi += 1
+    if letters == 0:
+        return 0.0
+    return vi / letters
+
+
+def _context_band(text: str, start: int, end: int, window: int = VI_CONTEXT_WINDOW) -> str:
+    """Phân loại ngữ cảnh token: vi_strong | mixed | en."""
+    center = start + max(0, (end - start) // 2)
+    ratio = _vi_ratio_around(text, center, window=window)
+    if ratio >= VI_CONTEXT_STRONG_THRESHOLD:
+        return "vi_strong"
+    if ratio >= VI_CONTEXT_MIXED_THRESHOLD:
+        return "mixed"
+    return "en"
+
+
+def _is_vietnamese_context(
+    text: str,
+    start: int,
+    end: int,
+    window: int = VI_CONTEXT_WINDOW,
+    threshold: float = VI_CONTEXT_STRONG_THRESHOLD,
+) -> bool:
+    """True khi token nằm trong vùng VN mạnh (mặc định ratio >= 0.5)."""
+    center = start + max(0, (end - start) // 2)
+    return _vi_ratio_around(text, center, window=window) >= threshold
 
 
 def _batch_check_spelling_word_com(app, words: List[str]) -> Dict[str, Tuple[bool, List[str]]]:
-    """Batch Word COM: word_lower -> (ok, suggestions)."""
+    """Batch Word COM qua 1 scratch doc + map lỗi theo range Start/End."""
     cache: Dict[str, Tuple[bool, List[str]]] = {}
+    if not words:
+        return cache
+
+    unique_words: List[str] = []
+    seen: Set[str] = set()
     for w in words:
-        ok = True
-        suggs: List[str] = []
+        wl = (w or "").lower()
+        if not wl or wl in seen:
+            continue
+        seen.add(wl)
+        unique_words.append(w)
+
+    if not unique_words:
+        return cache
+
+    scratch_ranges: List[Tuple[int, int, str]] = []
+    cursor = 0
+    for idx, w in enumerate(unique_words):
+        wl = w.lower()
+        start = cursor
+        end = start + len(w)
+        scratch_ranges.append((start, end, wl))
+        cursor = end + (1 if idx < len(unique_words) - 1 else 0)
+
+    proofing_ok = False
+    misspelled: Set[str] = set()
+    scratch_doc = None
+
+    try:
+        scratch_doc = app.Documents.Add()
+        scratch_doc.Content.Text = "\r".join(unique_words)
+
+        proof_errors = scratch_doc.Content.SpellingErrors
+        proofing_ok = True
+
+        scan_idx = 0
+        for i in range(1, int(proof_errors.Count) + 1):
+            try:
+                err = proof_errors.Item(i)
+                err_start = int(err.Start)
+                err_end = int(err.End)
+            except Exception:
+                continue
+
+            if err_end <= err_start:
+                err_end = err_start + 1
+
+            while scan_idx < len(scratch_ranges) and scratch_ranges[scan_idx][1] <= err_start:
+                scan_idx += 1
+
+            mapped = False
+            probe = scan_idx
+            while probe < len(scratch_ranges) and scratch_ranges[probe][0] < err_end:
+                w_start, w_end, w_lower = scratch_ranges[probe]
+                if w_end > err_start and w_start < err_end:
+                    misspelled.add(w_lower)
+                    mapped = True
+                probe += 1
+
+            if mapped:
+                continue
+
+            # Fallback nhẹ cho trường hợp range dính ký tự phân cách.
+            if scan_idx < len(scratch_ranges):
+                w_start, w_end, w_lower = scratch_ranges[scan_idx]
+                if abs(w_start - err_start) <= 1 or abs(w_end - err_end) <= 1:
+                    misspelled.add(w_lower)
+                    continue
+
+            if scan_idx > 0:
+                _, w_end, w_lower = scratch_ranges[scan_idx - 1]
+                if abs(err_start - w_end) <= 1:
+                    misspelled.add(w_lower)
+
+    except Exception as e:
+        log.debug(f"ProofreadingErrors batch failed: {e}")
+    finally:
         try:
-            ok = bool(app.CheckSpelling(w))
-            if not ok:
-                try:
-                    sugg_obj = app.GetSpellingSuggestions(w)
-                    if sugg_obj:
-                        for i in range(1, min(MAX_SUGGESTIONS, sugg_obj.Count) + 1):
-                            try:
-                                suggs.append(str(sugg_obj.Item(i).Name))
-                            except Exception:
-                                continue
-                except Exception:
-                    pass
-        except Exception:
-            ok = True
-        cache[w.lower()] = (ok, suggs)
+            if scratch_doc is not None:
+                scratch_doc.Close(SaveChanges=False)
+        except Exception as e:
+            log.debug(f"Error closing scratch proofing doc: {e}")
+
+    if not proofing_ok:
+        for w in unique_words:
+            cache[w.lower()] = (True, [])
+        return cache
+
+    for w in unique_words:
+        wl = w.lower()
+        ok = wl not in misspelled
+        suggs: List[str] = []
+
+        if not ok:
+            try:
+                sugg_obj = app.GetSpellingSuggestions(w)
+                if sugg_obj:
+                    for i in range(1, min(MAX_SUGGESTIONS, sugg_obj.Count) + 1):
+                        try:
+                            suggs.append(str(sugg_obj.Item(i).Name))
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+        cache[wl] = (ok, suggs)
+
     return cache
 
 
@@ -526,14 +645,15 @@ def _should_skip_word(word: str, text: str, match_pos: int) -> bool:
 # ----------------------------
 # Token classifier (ưu tiên precision)
 # ----------------------------
-def _token_kind(word: str, start: int, end: int, text: str, english_ok: Optional[Set[str]]) -> str:
+def _classify_token_language(word: str, text: str, start: int, english_ok: Set[str]) -> str:
     """
-    Phân loại token: vi / en / skip / unknown.
-    Mục tiêu: chỉ chạy heuristic VN lên token không chắc là EN và không thuộc nhóm skip.
+    Phân loại token theo ngữ cảnh: vi | en | en_term | skip.
+    en_term = thuật ngữ EN nằm trong vùng VN mạnh.
     """
     if not word:
         return "skip"
 
+    end = start + len(word)
     wl = word.lower()
 
     if EMAIL_RE.search(word) or URL_RE.search(word) or DOMAIN_RE.search(word) or CODELIKE_RE.match(word):
@@ -551,10 +671,13 @@ def _token_kind(word: str, start: int, end: int, text: str, english_ok: Optional
     if ("đ" in wl) or any(c in VN_CORE_CHARS for c in word) or _has_vi_chars(word):
         return "vi"
 
-    if english_ok is not None and wl in english_ok:
+    if wl in english_ok:
         return "en"
 
-    return "unknown"
+    if _is_vietnamese_context(text, start, end):
+        return "en_term"
+
+    return "en"
 
 
 # ----------------------------
@@ -573,6 +696,8 @@ def spellcheck_vietnamese(
     if ref_span is None:
         ref_span = find_references_span(text)
     ref_start = ref_span[0] if ref_span else None
+    english_engine_available = english_ok is not None
+    english_ok_set = english_ok or set()
 
     issues: List[Issue] = []
     issue_id = 1
@@ -584,11 +709,24 @@ def spellcheck_vietnamese(
         word = m.group(0)
         start, end = m.start(), m.end()
 
-        kind = _token_kind(word, start, end, text, english_ok=english_ok)
+        kind = _classify_token_language(word, text, start, english_ok=english_ok_set)
+        band = _context_band(text, start, end)
 
-        # EN hoặc nhóm skip thì thôi, không tô vàng theo heuristic VN
-        if kind in ("en", "skip"):
+        if kind == "skip":
             continue
+
+        if english_engine_available:
+            # en_term luôn check bằng EN engine, không chạy heuristic VN.
+            if kind == "en_term":
+                continue
+
+            # Mixed context (0.2-0.5): cho phép chạy cả heuristic VN trên token EN.
+            if kind == "en" and band != "mixed":
+                continue
+        else:
+            # Không có EN engine: chỉ bỏ qua EN context thuần, còn mixed/VN context vẫn chạy heuristic.
+            if kind == "en" and band == "en":
+                continue
 
         if len(word) <= 2:
             continue
@@ -651,7 +789,7 @@ def spellcheck_vietnamese(
 
         # ASCII dài: chỉ raise khi ngữ cảnh xung quanh là VN
         if _looks_like_vn_glued_ascii(word):
-            if _is_vietnamese_context(text, start, end, window=70, threshold=0.20):
+            if _context_band(text, start, end, window=70) in ("mixed", "vi_strong"):
                 if not _looks_like_english_shape(word):
                     issues.append(
                         Issue(
@@ -708,17 +846,20 @@ def spellcheck_vietnamese(
 # ----------------------------
 # Dual engine: English via Word COM + Vietnamese heuristic
 # ----------------------------
-def spellcheck_english_with_word(text: str, ref_span: Optional[Tuple[int, int]] = None) -> Dict:
+def spellcheck_english_with_word(
+    text: str,
+    ref_span: Optional[Tuple[int, int]] = None,
+    is_normalized: bool = False,
+) -> Dict:
     from .reference_finder import find_references_span
 
-    text = _normalize_text(text)
+    if not is_normalized:
+        text = _normalize_text(text)
     total_words = len(text.split())
 
     if ref_span is None:
         ref_span = find_references_span(text)
     ref_start = ref_span[0] if ref_span else None
-
-    line_ends, line_vi_ratio = _build_line_vi_ratio_map(text)
 
     if not WORD_AVAILABLE:
         vi_res = spellcheck_vietnamese(text, ref_span=ref_span, english_ok=None)
@@ -733,7 +874,6 @@ def spellcheck_english_with_word(text: str, ref_span: Optional[Tuple[int, int]] 
         }
 
     app = None
-    doc = None
     coinit_ok = False
 
     try:
@@ -743,9 +883,9 @@ def spellcheck_english_with_word(text: str, ref_span: Optional[Tuple[int, int]] 
         app = win32com.client.DispatchEx("Word.Application")
         app.Visible = False
         app.DisplayAlerts = 0
-        doc = app.Documents.Add()
 
         words_to_check: Dict[str, List[Tuple[int, int, str]]] = {}
+        empty_english_ok: Set[str] = set()
 
         for m in WORD_RE.finditer(text):
             if _in_references(m.start(), ref_start):
@@ -753,7 +893,6 @@ def spellcheck_english_with_word(text: str, ref_span: Optional[Tuple[int, int]] 
             if _in_citation_parentheses(text, m.start(), m.end()):
                 continue
 
-            is_vn_line = _is_vietnamese_line(m.start(), line_ends, line_vi_ratio)
             w = m.group(0)
 
             segments = (
@@ -774,8 +913,8 @@ def spellcheck_english_with_word(text: str, ref_span: Optional[Tuple[int, int]] 
                 if not _looks_like_english_word(seg):
                     continue
 
-                # VN line: bỏ token lowercase ngắn để tiết kiệm (thường là VN không dấu)
-                if is_vn_line and seg.islower() and len(seg) <= 5:
+                token_lang = _classify_token_language(seg, text, seg_start, english_ok=empty_english_ok)
+                if token_lang in ("skip", "vi"):
                     continue
 
                 wl = seg.lower()
@@ -856,11 +995,6 @@ def spellcheck_english_with_word(text: str, ref_span: Optional[Tuple[int, int]] 
         }
 
     finally:
-        try:
-            if doc is not None:
-                doc.Close(SaveChanges=False)
-        except Exception as e:
-            log.debug(f"Error closing Word document: {e}")
         try:
             if app is not None:
                 app.Quit()
