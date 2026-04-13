@@ -209,8 +209,9 @@ def llm_detect_structure(*, view_text: str, openai_model: str = DEFAULT_LLM_MODE
     - Nếu dòng đầu không phải tiếng Anh (rõ ràng) => present=false. (không suy luận)
 
     3) authors:
-    - Phải có thông tin tác giả trong [FRONT] (tên, đơn vị, email hoặc dấu hiệu liên hệ).
-    - Evidence ưu tiên dòng có "Email:" hoặc dòng tên + đơn vị.
+    - present=true CHỈ KHI trong [FRONT] có ÍT NHẤT 1 tên tác giả (hoặc danh sách tên) VÀ có thông tin liên hệ/đơn vị.
+    - CHỈ có dòng email/corresponding author mà KHÔNG thấy tên tác giả => present=false.
+    - Evidence ưu tiên dòng chứa tên tác giả; không dùng riêng dòng email làm evidence duy nhất.
 
     4) keywords_vi:
     - Dòng BẮT ĐẦU CHÍNH XÁC bằng "Từ khóa:" hoặc "Từ khoá:" trong [FRONT].
