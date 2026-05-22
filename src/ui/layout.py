@@ -44,6 +44,18 @@ def _overall_to_percent(overall_score: Any) -> float:
     return v * 100.0 if v <= 1.0 else v
 
 
+def _format_structure_status(sid: str, hit: Dict[str, Any]) -> str:
+    ok = (hit or {}).get("status") == "ok"
+    if not ok:
+        return "<span style='color:red; font-weight:bold;'>Không</span>"
+
+    if sid == "references":
+        style = str((hit or {}).get("references_style") or "Unknown").strip() or "Unknown"
+        return f"Có ({html.escape(style)})"
+
+    return "Có"
+
+
 def _extract_top_sources(fd: Dict[str, Any], k: int = 3) -> List[Dict[str, Any]]:
     """Đọc top sources theo nhiều schema khác nhau."""
     top_sources = fd.get("top_sources")
@@ -231,14 +243,13 @@ def render_structure_section(structure: Dict[str, Any]) -> None:
 
     for sid in TARGET_LABELS:
         hit = sections.get(sid, {}) or {}
-        ok = hit.get("status") == "ok"
         required = REQUIRED.get(sid, False)
 
         label = TARGET_LABELS.get(sid, sid)
         if required:
             label += " <span style='color:red; font-weight:bold;'>*</span>"
 
-        status = "Có" if ok else "<span style='color:red; font-weight:bold;'>Không</span>"
+        status = _format_structure_status(sid, hit)
         html_rows.append(f"<tr><td>{label}</td><td>{status}</td></tr>")
 
     table_html = f"""

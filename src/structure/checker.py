@@ -49,7 +49,7 @@ TARGETS = [
     ("methods", "Vật liệu và/hoặc phương pháp nghiên cứu"),
     ("results", "Kết quả và thảo luận"),
     ("conclusion", "Kết luận"),
-    ("references", "Tài liệu tham khảo: APA, IEEE, Chicago, Vancouver"),
+    ("references", "Tài liệu tham khảo"),
     ("appendix", "Phụ lục"),
     ("contributions", "Tuyên bố về đóng góp khoa học"),
     ("conflict_of_interest", "Cam kết về mâu thuẫn lợi ích"),
@@ -138,8 +138,17 @@ def _line_has_author_name(line: str) -> bool:
     scrub = _EMAIL_RE.sub(" ", line)
     scrub = _CONTACT_CUE_RE.sub(" ", scrub)
 
-    tokens = [t for t in _NAME_TOKEN_RE.findall(scrub) if t.lower() not in _NON_NAME_TOKENS]
-    return 2 <= len(tokens) <= 6
+    def name_tokens(text: str) -> List[str]:
+        return [t for t in _NAME_TOKEN_RE.findall(text) if t.lower() not in _NON_NAME_TOKENS]
+
+    tokens = name_tokens(scrub)
+    if 2 <= len(tokens) <= 6:
+        return True
+
+    # Multi-author lines can exceed the single-name token range. Check each
+    # comma/semicolon-separated author chunk before treating the line as non-name.
+    chunks = re.split(r"[,;]|\s+(?:and|&)\s+", scrub, flags=re.IGNORECASE)
+    return any(2 <= len(name_tokens(chunk)) <= 6 for chunk in chunks)
 
 
 def _front_has_author_name_near_contact(front_text: str, window: int = 2) -> bool:
