@@ -1,7 +1,6 @@
 """Streamlit app: kiểm tra chính tả, cấu trúc và đạo văn cho DOCX."""
 from __future__ import annotations
 
-import html
 import logging
 import os
 import sys
@@ -9,7 +8,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -96,7 +95,7 @@ st.markdown(
       }
       @keyframes tnt-rotate { to { transform: rotate(360deg); } }
 
-      /* Dark override */
+      /* Dark override — spinner màu xanh ở Streamlit page scope */
       @media (prefers-color-scheme: dark) {
         .tnt-metric {
           border: 1px solid rgba(255,255,255,0.12);
@@ -114,234 +113,24 @@ st.markdown(
 # ----------------------------
 # Module imports
 # ----------------------------
-from utils.cache import DocumentCache
+from utils import DocumentCache
 from utils.config import MAX_WORKERS
 from ui.handlers import check_structure, check_spell, check_plagiarism
-from ui.components import highlight_html
-from ui.layout import render_plagiarism_section, render_structure_section
+from ui.render import (
+    count_issue_types,
+    render_doc_and_spell,
+    render_plagiarism,
+    render_structure,
+)
 
 # ----------------------------
-# Helpers (UI)
+# Helpers (workflow)
 # ----------------------------
-def _count_issue_types(issues: List[Dict]) -> Tuple[int, int, int]:
-    """Trả (en_count, vi_count, other_count)."""
-    if not issues:
-        return 0, 0, 0
-    en = vi = other = 0
-    for it in issues:
-        t = (it.get("type") or "").strip()
-        if t == "en_spelling":
-            en += 1
-        elif t.startswith("vi_"):
-            vi += 1
-        else:
-            other += 1
-    return en, vi, other
-
-
-import re
-
-# Token kiểu "dieuanh.ln", "tmu.edu" (thường là mảnh của email/domain)
-EMAIL_PART_RE = re.compile(r"^[a-z0-9._-]+$", re.I)
-
-
-def _decorate_issues_for_ui(issues: List[Dict]) -> List[Dict]:
-    """Gắn ui_color cho highlight (lọc bớt token dạng email/domain)."""
-    out: List[Dict] = []
-    for it in (issues or []):
-        t = (it.get("type") or "").strip()
-        word = (it.get("word") or it.get("text") or "").strip()
-
-        if "." in word and EMAIL_PART_RE.match(word):
-            continue
-
-        it2 = dict(it)
-        if t == "en_spelling":
-            it2["ui_color"] = "red"
-        elif t.startswith("vi_"):
-            it2["ui_color"] = "yellow"
-        else:
-            continue
-        out.append(it2)
-    return out
-
-
 def _is_spell_ok(spell_result: Dict) -> bool:
     """True nếu spell trả schema hợp lệ."""
     return isinstance(spell_result, dict) and "issues" in spell_result
 
 
-def _render_status_bar(
-    placeholders: Dict[str, st.delta_generator.DeltaGenerator],
-    states: Dict[str, Dict],
-):
-    """Render status bar theo states."""
-    for k, ph in placeholders.items():
-        info = states.get(k, {"state": "idle", "msg": ""})
-        ph.markdown(f"**{k.upper()}**  \n{info.get('msg','')}")
-
-
-def _render_metric_card(title: str, value: str | int, accent: str | None = None) -> None:
-    """Metric card tuỳ biến (hợp light/dark)."""
-    accent_class = ""
-    if accent == "red":
-        accent_class = "tnt-accent-red"
-    elif accent == "yellow":
-        accent_class = "tnt-accent-yellow"
-
-    st.markdown(
-        f"""
-        <div class="tnt-metric">
-          <div class="tnt-metric-title {accent_class}">
-            {html.escape(title)}
-          </div>
-          <div class="tnt-metric-value">
-            {html.escape(str(value))}
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def _render_doc_and_spell(
-    placeholder,
-    *,
-    file_name: str,
-    text: str,
-    word_count: int,
-    issues: List[Dict],
-    spell_error: str | None,
-    is_spell_ready: bool,
-):
-    placeholder.empty()
-    with placeholder.container():
-        if not text:
-            st.info("Chưa có nội dung để hiển thị. Hãy upload DOCX và bấm **Kiểm tra**.")
-            return
-
-        st.caption(f"File: {file_name}")
-
-        if spell_error:
-            st.warning(f"**Kiểm tra chính tả lỗi:** {spell_error}")
-
-        en_count, vi_count, other_count = _count_issue_types(issues)
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            _render_metric_card("Số từ", word_count)
-        with c2:
-            _render_metric_card("Lỗi chính tả (EN)", en_count if is_spell_ready else "—", accent="red")
-        with c3:
-            _render_metric_card("Nghi ngờ (VI)", vi_count if is_spell_ready else "—", accent="yellow")
-
-        # Khi spell xong thì render highlight; chưa xong thì show text_area nhanh
-        if is_spell_ready:
-            issues_for_ui = _decorate_issues_for_ui(issues)
-            html_out = highlight_html(text, issues_for_ui)
-
-            iframe_css = """
-            <style>
-            html, body { margin:0; padding:0; }
-            body {
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-              font-size: 16px;
-              line-height: 1.55;
-            }
-            .tnt-doc {
-              padding: 14px 16px;
-              max-height: 800px;
-              overflow: auto;
-              border-radius: 12px;
-            }
-            .tnt-doc span { color: inherit; }
-
-            @media (prefers-color-scheme: light) {
-              body { background: #ffffff; color: #111827; }
-              .tnt-doc { background: #ffffff; }
-            }
-            @media (prefers-color-scheme: dark) {
-              body { background: #0e1117; color: rgba(255,255,255,0.92); }
-              .tnt-doc { background: #0e1117; }
-            }
-
-            .tnt-loading {
-              display: inline-flex;
-              align-items: center;
-              gap: 0;
-              padding: 0;
-              border: 0;
-              border-radius: 0;
-              background: transparent;
-            }
-            .tnt-spin {
-              width: 18px;
-              height: 18px;
-              border-radius: 50%;
-              border: 3px solid rgba(255,255,255,0.25);
-              border-top-color: rgba(255,255,255,0.9);
-              animation: tnt-rotate 0.8s linear infinite;
-            }
-            @keyframes tnt-rotate { to { transform: rotate(360deg); } }
-            </style>
-            """
-
-            st.components.v1.html(
-                f"<!doctype html><html><head>{iframe_css}</head>"
-                f"<body><div class='tnt-doc'>{html_out}</div></body></html>",
-                height=820,
-            )
-        else:
-            st.text_area(
-                "Nội dung bài báo",
-                value=text,
-                height=820,
-                label_visibility="collapsed",
-            )
-
-
-def _render_plagiarism(placeholder, *, data: Dict, state: str, error: str | None):
-    """Render section đạo văn theo state."""
-    placeholder.empty()
-    with placeholder.container():
-        st.subheader("Kiểm tra đạo văn")
-        if state == "running":
-            st.markdown(
-                """
-                <div class="tnt-loading">
-                  <div class="tnt-spin"></div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        elif state in ("error", "timeout") and not data:
-            st.error(error or "Không lấy được kết quả đạo văn.")
-        elif state == "ok":
-            render_plagiarism_section(data or {})
-        else:
-            st.caption("Chưa có kết quả.")
-
-
-def _render_structure(placeholder, *, data: Dict, state: str, error: str | None):
-    """Render section cấu trúc theo state."""
-    placeholder.empty()
-    with placeholder.container():
-        st.subheader("Cấu trúc bài báo")
-        if state == "running":
-            st.markdown(
-                """
-                <div class="tnt-loading">
-                  <div class="tnt-spin"></div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        elif state in ("error", "timeout") and not data:
-            st.error(error or "Không lấy được kết quả cấu trúc.")
-        elif state == "ok":
-            render_structure_section(data or {})
-        else:
-            st.caption("Chưa có kết quả.")
 
 
 def _cleanup_old_tmp_files(ttl_seconds: int = 2 * 60 * 60) -> None:
@@ -376,6 +165,7 @@ def _reset_results_state() -> None:
     st.session_state.spell_check_error = None
     st.session_state.structure_check_error = None
     st.session_state.plagiarism_check_error = None
+    st.session_state.spell_checked = False
 
 
 # ----------------------------
@@ -385,14 +175,18 @@ st.title("TNT Check AI")
 
 _cleanup_old_tmp_files()
 
-SHOW_STATUS_BAR = False  # bật nếu muốn status bar phía trên
-
 # ----------------------------
 # Sidebar - upload
 # ----------------------------
 with st.sidebar:
     st.subheader("Upload bài báo")
     f = st.file_uploader("Chọn file DOCX", type=["docx"])
+    spell_language_label = st.radio(
+        "Ngôn ngữ kiểm tra chính tả",
+        options=["Tiếng Anh", "Tiếng Việt"],
+        horizontal=True,
+    )
+    spell_language = "vi" if spell_language_label == "Tiếng Việt" else "en"
     st.divider()
     run_check = st.button(
         "Kiểm tra",
@@ -415,21 +209,14 @@ st.session_state.setdefault("spell_check_error", None)
 st.session_state.setdefault("structure_check_error", None)
 st.session_state.setdefault("plagiarism_check_error", None)
 st.session_state.setdefault("_tmp_garbage", [])
+st.session_state.setdefault("spell_checked", False)
+st.session_state.setdefault("checked_file_sig", None)
+st.session_state.setdefault("checked_spell_language", None)
+st.session_state.spell_language = spell_language
 
 # ----------------------------
 # Layout placeholders
 # ----------------------------
-if SHOW_STATUS_BAR:
-    status_bar = st.container()
-    with status_bar:
-        s1, s2, s3, s4 = st.columns(4)
-        st_doc = s1.empty()
-        st_spell = s2.empty()
-        st_plag = s3.empty()
-        st_struct = s4.empty()
-else:
-    st_doc = st_spell = st_plag = st_struct = None
-
 left, right = st.columns([2, 1])
 
 with left:
@@ -441,22 +228,23 @@ with right:
     structure_placeholder = st.empty()
 
 # Render state hiện tại (hữu ích khi rerun)
-_render_doc_and_spell(
+render_doc_and_spell(
     doc_placeholder,
     file_name=st.session_state.file_name,
     text=st.session_state.text,
     word_count=st.session_state.word_count,
     issues=st.session_state.issues,
     spell_error=st.session_state.spell_check_error,
-    is_spell_ready=bool(st.session_state.issues) or (st.session_state.spell_check_error is not None),
+    is_spell_ready=st.session_state.spell_checked,
+    spell_language=st.session_state.spell_language,
 )
-_render_plagiarism(
+render_plagiarism(
     plagiarism_placeholder,
     data=st.session_state.plagiarism or {},
     state="ok" if st.session_state.plagiarism else "idle",
     error=st.session_state.plagiarism_check_error,
 )
-_render_structure(
+render_structure(
     structure_placeholder,
     data=st.session_state.structure or {},
     state="ok" if st.session_state.structure else "idle",
@@ -475,18 +263,8 @@ if f and run_check:
 
     _reset_results_state()
     st.session_state.file_size = current_file_size
-
-    status_states = {
-        "doc": {"state": "running", "msg": "Đang đọc DOCX…"},
-        "spell": {"state": "idle", "msg": ""},
-        "structure": {"state": "idle", "msg": ""},
-        "plagiarism": {"state": "idle", "msg": ""},
-    }
-    if SHOW_STATUS_BAR:
-        _render_status_bar(
-            {"doc": st_doc, "spell": st_spell, "structure": st_struct, "plagiarism": st_plag},
-            status_states,
-        )
+    st.session_state.checked_file_sig = (f.name, current_file_size)
+    st.session_state.checked_spell_language = st.session_state.spell_language
 
     logger.info("Starting checks on file: %s (size: %d bytes)", f.name, current_file_size)
 
@@ -510,18 +288,7 @@ if f and run_check:
         st.session_state.word_count = int(getattr(doc_cache, "word_count", 0) or 0)
         st.session_state.file_name = f.name
 
-        status_states["doc"] = {"state": "ok", "msg": f"Đã đọc DOCX ({t_parse:.2f}s)"}
-        status_states["spell"] = {"state": "running", "msg": "Đang kiểm tra…"}
-        status_states["structure"] = {"state": "running", "msg": "Đang kiểm tra…"}
-        status_states["plagiarism"] = {"state": "running", "msg": "Đang kiểm tra…"}
-
-        if SHOW_STATUS_BAR:
-            _render_status_bar(
-                {"doc": st_doc, "spell": st_spell, "structure": st_struct, "plagiarism": st_plag},
-                status_states,
-            )
-
-        _render_doc_and_spell(
+        render_doc_and_spell(
             doc_placeholder,
             file_name=st.session_state.file_name,
             text=st.session_state.text,
@@ -529,9 +296,10 @@ if f and run_check:
             issues=[],
             spell_error=None,
             is_spell_ready=False,
+            spell_language=st.session_state.spell_language,
         )
-        _render_plagiarism(plagiarism_placeholder, data={}, state="running", error=None)
-        _render_structure(structure_placeholder, data={}, state="running", error=None)
+        render_plagiarism(plagiarism_placeholder, data={}, state="running", error=None)
+        render_structure(structure_placeholder, data={}, state="running", error=None)
 
         # 3) Chạy song song + timeout guard
         timeouts = {"spell": 60, "structure": 120, "plagiarism": 900}
@@ -541,7 +309,7 @@ if f and run_check:
 
         futures: Dict[str, object] = {}
         futures["structure"] = ex.submit(check_structure, tmp_path, doc_cache)
-        futures["spell"] = ex.submit(check_spell, doc_cache)
+        futures["spell"] = ex.submit(check_spell, doc_cache, st.session_state.spell_language)
         futures["plagiarism"] = ex.submit(check_plagiarism, tmp_path, doc_cache)
 
         rev = {fut: name for name, fut in futures.items()}
@@ -562,6 +330,8 @@ if f and run_check:
                         fut.cancel()
                     except Exception:
                         pass
+                    
+                    pending.discard(fut)
 
                     if name == "structure":
                         st.session_state.structure = {
@@ -571,21 +341,21 @@ if f and run_check:
                             "error": "Quá thời gian xử lý (>120s)",
                         }
                         st.session_state.structure_check_error = "Quá thời gian xử lý (>120s)"
-                        status_states["structure"] = {"state": "timeout", "msg": "Timeout >120s"}
-                        _render_structure(structure_placeholder, data=st.session_state.structure, state="timeout", error=st.session_state.structure_check_error)
+                        render_structure(structure_placeholder, data=st.session_state.structure, state="timeout", error=st.session_state.structure_check_error)
 
                     elif name == "spell":
                         st.session_state.issues = []
                         st.session_state.spell_check_error = "Quá thời gian xử lý (>60s)"
-                        status_states["spell"] = {"state": "timeout", "msg": "Timeout >60s"}
-                        _render_doc_and_spell(
+                        st.session_state.spell_checked = True
+                        render_doc_and_spell(
                             doc_placeholder,
                             file_name=st.session_state.file_name,
                             text=st.session_state.text,
                             word_count=st.session_state.word_count,
                             issues=st.session_state.issues,
                             spell_error=st.session_state.spell_check_error,
-                            is_spell_ready=True,
+                            is_spell_ready=st.session_state.spell_checked,
+                            spell_language=st.session_state.spell_language,
                         )
 
                     elif name == "plagiarism":
@@ -596,14 +366,7 @@ if f and run_check:
                             "error": "Quá thời gian xử lý (>900s)",
                         }
                         st.session_state.plagiarism_check_error = "Quá thời gian xử lý (>900s)"
-                        status_states["plagiarism"] = {"state": "timeout", "msg": "Timeout >900s"}
-                        _render_plagiarism(plagiarism_placeholder, data=st.session_state.plagiarism, state="timeout", error=st.session_state.plagiarism_check_error)
-
-                    if SHOW_STATUS_BAR:
-                        _render_status_bar(
-                            {"doc": st_doc, "spell": st_spell, "structure": st_struct, "plagiarism": st_plag},
-                            status_states,
-                        )
+                        render_plagiarism(plagiarism_placeholder, data=st.session_state.plagiarism, state="timeout", error=st.session_state.plagiarism_check_error)
 
             for fut in done:
                 name = rev[fut]
@@ -620,28 +383,27 @@ if f and run_check:
                     if name == "structure":
                         st.session_state.structure = {"ok": False, "sections": {}, "notes": [], "error": msg}
                         st.session_state.structure_check_error = msg
-                        status_states["structure"] = {"state": "error", "msg": f"Lỗi ({elapsed:.1f}s)"}
-                        _render_structure(structure_placeholder, data=st.session_state.structure, state="error", error=msg)
+                        render_structure(structure_placeholder, data=st.session_state.structure, state="error", error=msg)
 
                     elif name == "spell":
                         st.session_state.issues = []
                         st.session_state.spell_check_error = msg
-                        status_states["spell"] = {"state": "error", "msg": f"Lỗi ({elapsed:.1f}s)"}
-                        _render_doc_and_spell(
+                        st.session_state.spell_checked = True
+                        render_doc_and_spell(
                             doc_placeholder,
                             file_name=st.session_state.file_name,
                             text=st.session_state.text,
                             word_count=st.session_state.word_count,
                             issues=st.session_state.issues,
                             spell_error=st.session_state.spell_check_error,
-                            is_spell_ready=True,
+                            is_spell_ready=st.session_state.spell_checked,
+                            spell_language=st.session_state.spell_language,
                         )
 
                     elif name == "plagiarism":
                         st.session_state.plagiarism = {"success": False, "overall_score": 0.0, "findings": [], "error": msg}
                         st.session_state.plagiarism_check_error = msg
-                        status_states["plagiarism"] = {"state": "error", "msg": f"Lỗi ({elapsed:.1f}s)"}
-                        _render_plagiarism(plagiarism_placeholder, data=st.session_state.plagiarism, state="error", error=msg)
+                        render_plagiarism(plagiarism_placeholder, data=st.session_state.plagiarism, state="error", error=msg)
 
                 else:
                     if name == "structure":
@@ -651,8 +413,7 @@ if f and run_check:
                             if not st.session_state.structure.get("ok", False)
                             else None
                         )
-                        status_states["structure"] = {"state": "ok", "msg": f"Xong ({elapsed:.1f}s)"}
-                        _render_structure(structure_placeholder, data=st.session_state.structure, state="ok", error=st.session_state.structure_check_error)
+                        render_structure(structure_placeholder, data=st.session_state.structure, state="ok", error=st.session_state.structure_check_error)
 
                     elif name == "spell":
                         spell_ok = _is_spell_ok(res)
@@ -660,16 +421,17 @@ if f and run_check:
                         st.session_state.spell_check_error = spell_error
                         st.session_state.issues = (res.get("issues", []) if isinstance(res, dict) else []) or []
                         st.session_state.word_count = int((res.get("total_words", 0) if isinstance(res, dict) else 0) or st.session_state.word_count)
+                        st.session_state.spell_checked = True
 
-                        status_states["spell"] = {"state": "ok" if spell_error is None else "error", "msg": f"Xong ({elapsed:.1f}s)"}
-                        _render_doc_and_spell(
+                        render_doc_and_spell(
                             doc_placeholder,
                             file_name=st.session_state.file_name,
                             text=st.session_state.text,
                             word_count=st.session_state.word_count,
                             issues=st.session_state.issues,
                             spell_error=st.session_state.spell_check_error,
-                            is_spell_ready=True,
+                            is_spell_ready=st.session_state.spell_checked,
+                            spell_language=st.session_state.spell_language,
                         )
 
                     elif name == "plagiarism":
@@ -679,28 +441,22 @@ if f and run_check:
                             if not st.session_state.plagiarism.get("success", False)
                             else None
                         )
-                        status_states["plagiarism"] = {"state": "ok", "msg": f"Xong ({elapsed:.1f}s)"}
-                        _render_plagiarism(plagiarism_placeholder, data=st.session_state.plagiarism, state="ok", error=st.session_state.plagiarism_check_error)
+                        render_plagiarism(plagiarism_placeholder, data=st.session_state.plagiarism, state="ok", error=st.session_state.plagiarism_check_error)
 
                 finished.add(name)
-                if SHOW_STATUS_BAR:
-                    _render_status_bar(
-                        {"doc": st_doc, "spell": st_spell, "structure": st_struct, "plagiarism": st_plag},
-                        status_states,
-                    )
 
-        en_count, vi_count, _ = _count_issue_types(st.session_state.issues)
-        logger.info("Hoàn tất kiểm tra: EN=%s, VI_suspects=%s, tổng từ=%s", en_count, vi_count, st.session_state.word_count)
+        en_count, vi_count = count_issue_types(st.session_state.issues)
+        selected_errors = vi_count if st.session_state.spell_language == "vi" else en_count
+        logger.info(
+            "Hoàn tất kiểm tra: spell_language=%s, spelling_errors=%s, tổng từ=%s",
+            st.session_state.spell_language,
+            selected_errors,
+            st.session_state.word_count,
+        )
 
     except Exception as e:
         logger.error("Lỗi trong quá trình kiểm tra: %s", e, exc_info=True)
         st.error(f"Lỗi: {str(e)}")
-        status_states["doc"] = {"state": "error", "msg": "Lỗi khi xử lý"}
-        if SHOW_STATUS_BAR:
-            _render_status_bar(
-                {"doc": st_doc, "spell": st_spell, "structure": st_struct, "plagiarism": st_plag},
-                status_states,
-            )
     finally:
         # Nếu có timeout: giữ tmp để thread còn dùng, dọn sau bằng _cleanup_old_tmp_files()
         if tmp_path:

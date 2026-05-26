@@ -85,31 +85,37 @@ spell-check-paper/
 │   │
 │   ├── structure/             # Structure checking
 │   │   ├── classifier.py      # LLM-based section classification
+│   │   ├── prompt.py          # Prompts for structure classification
 │   │   └── checker.py         # Structure validation
 │   │
 │   ├── spell/                 # Spell checking
 │   │   ├── checker.py         # Orchestration
-│   │   └── pipeline.py        # Language-selected spell pipeline (EN or VI)
+│   │   ├── pipeline.py        # Language-selected spell pipeline (EN or VI)
+│   │   ├── english_languagetool.py
+│   │   ├── vietnamese_hunspell.py
+│   │   ├── tokenizer.py
+│   │   ├── reference_finder.py
+│   │   └── models.py
 │   │
 │   ├── plagiarism/            # Plagiarism checking
 │   │   ├── api_client.py      # Turnitin/iThenticate API
-│   │   ├── checker.py         # Check orchestration
+│   │   └── checker.py         # Check orchestration
 │   │
 │   ├── ui/                    # UI components
 │   │   ├── components.py      # HTML rendering
 │   │   ├── handlers.py        # Streamlit handlers
-│   │   └── layout.py          # Results display
+│   │   ├── layout.py          # Results display
+│   │   └── render.py          # Render functions for spell check and plagiarism
 │   │
 │   └── utils/                 # Utilities
 │       ├── config.py          # Configuration
-│       ├── validation.py      # API validation
+│       ├── document_parser.py # Document caching/parsing
+│       └── validation.py      # API validation
 │
 └── tests/                     # Unit tests
 ```
 
 ## Cấu hình
-
-
 ### Logging
 
 Mặc định logging ở mức INFO. Để debug, mở `app.py` và đổi thành:
