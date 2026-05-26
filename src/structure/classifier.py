@@ -8,7 +8,6 @@ import re
 from typing import Any, Dict
 
 from utils.config import DEFAULT_LLM_MODEL
-from utils.rate_limiter import openai_limiter, rate_limit, retry_with_backoff
 from utils.validation import APIValidationError, validate_openai_api_key
 
 from .prompt import build_structure_prompt
@@ -160,8 +159,6 @@ def _build_structure_prompt(view_text: str) -> str:
     return build_structure_prompt(view_text, TARGETS_JSON)
 
 
-@rate_limit(openai_limiter)
-@retry_with_backoff(max_retries=3, initial_delay=2.0)
 def llm_detect_structure(*, view_text: str, openai_model: str = DEFAULT_LLM_MODEL) -> Dict[str, Any]:
     if not OPENAI_AVAILABLE:
         raise RuntimeError("OPENAI_AVAILABLE=False (pip install openai)")

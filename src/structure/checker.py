@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from utils.config import DEFAULT_LLM_MODEL, DEFAULT_MIN_CONFIDENCE
+from utils.document_parser import DocPara, extract_docx_paragraphs, paragraphs_to_full_text
 
 from .classifier import TARGETS, llm_detect_structure
-from .parser import DocPara, extract_docx_paragraphs, paragraphs_to_full_text
 
 logger = logging.getLogger("structure_checker")
 
