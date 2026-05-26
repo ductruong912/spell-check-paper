@@ -17,19 +17,12 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from document_backend import check_plagiarism_in_file
-from spell.checker import spellcheck_auto
+from spell.checker import spellcheck_text
 from structure.checker import check_structure_docx
-from utils.cache import DocumentCache
-from utils.config import PLAGIARISM_TOPK
+from utils import DocumentCache
 from utils.validation import get_user_friendly_error, APIValidationError
 
 logger = logging.getLogger(__name__)
-
-# ----------------------------
-# Paths
-# ----------------------------
-PLAG_INDEX_DIR = str(SRC_DIR / "plag_index")
-
 
 # ----------------------------
 # Helpers
@@ -150,10 +143,10 @@ def check_structure(file_path: str, doc_cache: DocumentCache) -> Dict[str, Any]:
         return {"ok": False, "sections": {}, "notes": [], "error": error_vi}
 
 
-def check_spell(doc_cache: DocumentCache) -> Dict[str, Any]:
-    """Check chính tả bằng text/ref_span đã cache."""
+def check_spell(doc_cache: DocumentCache, spell_language: str = "en") -> Dict[str, Any]:
+    """Check chính tả bằng text/ref_span đã cache và ngôn ngữ người dùng chọn."""
     try:
-        result = spellcheck_auto(doc_cache.text, ref_span=doc_cache.ref_span)
+        result = spellcheck_text(doc_cache.text, ref_span=doc_cache.ref_span, language=spell_language)
 
         issues = result.get("issues", []) if isinstance(result, dict) else []
         total_words = result.get("total_words", doc_cache.word_count) if isinstance(result, dict) else doc_cache.word_count
@@ -168,6 +161,7 @@ def check_spell(doc_cache: DocumentCache) -> Dict[str, Any]:
             "total_words": int(total_words or 0),
             "checked_words": int(checked_words or 0),
             "meta": meta,
+            "selected_language": spell_language,
             "success": True,
         }
 
@@ -178,6 +172,7 @@ def check_spell(doc_cache: DocumentCache) -> Dict[str, Any]:
             "total_words": int(getattr(doc_cache, "word_count", 0) or 0),
             "checked_words": 0,
             "meta": {"ref_span": getattr(doc_cache, "ref_span", None)},
+            "selected_language": spell_language,
             "success": False,
             "error": e.message_vi,
         }
@@ -189,6 +184,7 @@ def check_spell(doc_cache: DocumentCache) -> Dict[str, Any]:
             "total_words": int(getattr(doc_cache, "word_count", 0) or 0),
             "checked_words": 0,
             "meta": {"ref_span": getattr(doc_cache, "ref_span", None)},
+            "selected_language": spell_language,
             "success": False,
             "error": error_vi,
         }
@@ -199,12 +195,6 @@ def check_plagiarism(file_path: str, doc_cache: DocumentCache) -> Dict[str, Any]
     try:
         result = check_plagiarism_in_file(
             file_path,
-            index_dir=PLAG_INDEX_DIR,
-            topk=PLAGIARISM_TOPK,
-            make_report=False,
-            use_lsh_filter=True,
-            use_fuzzy_match=False,
-            use_llm_verify=False,
             parsed_paras=doc_cache.paras,
         )
 

@@ -1,8 +1,9 @@
 """Xác thực API và map lỗi kỹ thuật -> thông báo tiếng Việt."""
 
-import os
 import logging
 from typing import Optional, Tuple
+
+from .config import API_KEY, API_USER, OPENAI_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +18,10 @@ class APIValidationError(Exception):
 
 
 def validate_openai_api_key() -> Tuple[bool, Optional[str], Optional[str]]:
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = OPENAI_API_KEY
 
     if not api_key:
-        logger.error("OPENAI_API_KEY not found in environment")
+        logger.error("OPENAI_API_KEY not found in .env")
         return False, None, "Thiếu OPENAI_API_KEY trong file .env"
 
     if not api_key.startswith("sk-"):
@@ -36,30 +37,29 @@ def validate_openai_api_key() -> Tuple[bool, Optional[str], Optional[str]]:
 
 
 def validate_plagiarism_api_credentials() -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
-    api_user = os.getenv("PLAGIARISMSEARCH_API_USER")
-    api_key = os.getenv("PLAGIARISMSEARCH_API_KEY")
+    api_key = API_USER
+    api_secret = API_KEY
 
-    if not api_user or not api_key:
+    if not api_key or not api_secret:
         missing = []
-        if not api_user:
-            missing.append("PLAGIARISMSEARCH_API_USER")
         if not api_key:
-            missing.append("PLAGIARISMSEARCH_API_KEY")
+            missing.append("TURNITIN_API_KEY")
+        if not api_secret:
+            missing.append("TURNITIN_API_SECRET")
 
-        logger.error(f"Missing PlagiarismSearch credentials: {', '.join(missing)}")
+        logger.error(f"Missing Turnitin credentials: {', '.join(missing)}")
         return False, None, None, f"Thiếu thông tin API trong .env: {', '.join(missing)}"
 
-    # Basic email shape check
-    if "@" not in api_user or "." not in api_user:
-        logger.error(f"PLAGIARISMSEARCH_API_USER has invalid email format: {api_user}")
-        return False, None, None, "PLAGIARISMSEARCH_API_USER không đúng định dạng email"
+    if len(api_key) < 5:
+        logger.error("TURNITIN_API_KEY is too short (likely invalid)")
+        return False, None, None, "TURNITIN_API_KEY quá ngắn (không hợp lệ)"
 
-    if len(api_key) < 30:
-        logger.error("PLAGIARISMSEARCH_API_KEY is too short (likely invalid)")
-        return False, None, None, "PLAGIARISMSEARCH_API_KEY quá ngắn (không hợp lệ)"
+    if len(api_secret) < 10:
+        logger.error("TURNITIN_API_SECRET is too short (likely invalid)")
+        return False, None, None, "TURNITIN_API_SECRET quá ngắn (không hợp lệ)"
 
-    logger.debug(f"PlagiarismSearch API credentials validated for user: {api_user}")
-    return True, api_user, api_key, None
+    logger.debug("Turnitin API credentials validated")
+    return True, api_key, api_secret, None
 
 
 def get_user_friendly_error(exception: Exception) -> str:
@@ -79,19 +79,19 @@ def get_user_friendly_error(exception: Exception) -> str:
         logger.warning(f"OpenAI timeout: {exception}")
         return "Kết nối OpenAI bị timeout. Vui lòng kiểm tra kết nối mạng."
 
-    # PlagiarismSearch errors
-    if "plagiarism" in error_str and ("401" in error_str or "authentication" in error_str):
-        logger.warning(f"PlagiarismSearch authentication failed: {exception}")
-        return "Xác thực PlagiarismSearch thất bại. Vui lòng kiểm tra API credentials trong .env"
+    # Turnitin/iThenticate errors
+    if "turnitin" in error_str and ("401" in error_str or "authentication" in error_str):
+        logger.warning(f"Turnitin authentication failed: {exception}")
+        return "Xác thực Turnitin/iThenticate thất bại. Vui lòng kiểm tra API credentials trong .env"
 
-    if "plagiarism" in error_str and "timeout" in error_str:
-        logger.warning(f"PlagiarismSearch timeout: {exception}")
-        return "Kết nối PlagiarismSearch bị timeout. Vui lòng thử lại sau."
+    if "turnitin" in error_str and "timeout" in error_str:
+        logger.warning(f"Turnitin timeout: {exception}")
+        return "Kết nối Turnitin bị timeout. Vui lòng thử lại sau."
 
-    # Word COM
-    if "com" in error_str or "word" in error_str:
-        logger.warning(f"Microsoft Word COM error: {exception}")
-        return "Lỗi kết nối Microsoft Word. Vui lòng đảm bảo Word đã được cài đặt."
+    # LanguageTool / Java local server
+    if "languagetool" in error_str or "java" in error_str:
+        logger.warning(f"LanguageTool error: {exception}")
+        return "Lỗi khởi động LanguageTool. Vui lòng kiểm tra Java và thử lại."
 
     # File I/O
     if "file not found" in error_str or "no such file" in error_str:

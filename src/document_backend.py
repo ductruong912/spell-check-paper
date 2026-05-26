@@ -84,15 +84,9 @@ def _empty_plagiarism_result(*, total_words: int, note: str) -> Dict[str, Any]:
 # ----------------------------
 def check_plagiarism_in_file(
     file_path: str,
-    index_dir: str = "",
-    topk: int = 10,
-    make_report: bool = False,
-    use_lsh_filter: bool = True,
-    use_fuzzy_match: bool = False,
-    use_llm_verify: bool = False,
     parsed_paras: Optional[List] = None,
 ) -> Dict[str, Any]:
-    """Wrapper cho UI: gọi PlagiarismSearch (giữ signature tương thích)."""
+    """Wrapper cho UI: gọi Turnitin/iThenticate (giữ signature tương thích)."""
     try:
         if not file_path or not isinstance(file_path, str):
             logger.error("Invalid file_path: %s", file_path)
@@ -122,21 +116,21 @@ def check_plagiarism_in_file(
 
         # 1) Module không sẵn
         if not PLAGIARISM_API_AVAILABLE:
-            logger.warning("PlagiarismSearch module not available")
+            logger.warning("Turnitin module not available")
             return _empty_plagiarism_result(
                 total_words=total_words,
-                note="Module PlagiarismSearch không khả dụng (import thất bại).",
+                note="Module Turnitin/iThenticate không khả dụng (import thất bại).",
             )
 
         # 2) Creds chưa ok
         try:
-            api_user, _ = _require_creds()
-            logger.info("PlagiarismSearch API configured: %s", api_user)
+            api_key_used, _ = _require_creds()
+            logger.info("Turnitin API configured: %s...", api_key_used[:5])
         except Exception as e:
-            logger.warning("PlagiarismSearch API not configured/invalid: %s", str(e)[:200])
+            logger.warning("Turnitin API not configured/invalid: %s", str(e)[:200])
             return _empty_plagiarism_result(
                 total_words=total_words,
-                note="PlagiarismSearch API chưa được cấu hình hoặc không hợp lệ",
+                note="Turnitin API chưa được cấu hình hoặc không hợp lệ",
             )
 
         # 3) Call checker
@@ -144,7 +138,6 @@ def check_plagiarism_in_file(
         result = check_plagiarism_body_only(
             docx_path=file_path,
             timeout_s=900,
-            use_dynamic_chunks=True,
         ) or {}
 
         # 4) Normalize schema cho UI
