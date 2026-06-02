@@ -1,5 +1,5 @@
 """Spell checking entry points."""
-
+import re
 import unicodedata
 from typing import Dict, Optional, Tuple
 
@@ -8,13 +8,30 @@ from .reference_finder import find_references_span
 
 
 def _normalize_text(text: str) -> str:
-	"""Chuẩn hoá text để offset ổn định (NFC, bỏ BOM/zero-width)."""
-	if not text:
-		return ""
-	normalized = unicodedata.normalize("NFC", text)
-	normalized = normalized.replace("\ufeff", "")
-	normalized = normalized.replace("\u200b", "")
-	return normalized
+    """Normalize text while preserving offsets as much as possible."""
+    if not text:
+        return ""
+
+    text = unicodedata.normalize("NFC", text)
+
+    replacements = {
+        "\ufeff": "",   # BOM
+        "\u200b": "",   # zero width space
+        "\u200c": "",   # zero width non-joiner
+        "\u200d": "",   # zero width joiner
+        "\u2060": "",   # word joiner
+
+        "\u00a0": " ",  # NBSP
+        "\u2009": " ",  # thin space
+        "\u202f": " ",  # narrow nbsp
+
+        "\u00ad": "",   # soft hyphen
+    }
+
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+
+    return text
 
 
 def _clamp_span(span: Optional[Tuple[int, int]], text_len: int) -> Optional[Tuple[int, int]]:

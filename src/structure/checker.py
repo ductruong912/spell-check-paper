@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from utils.config import DEFAULT_LLM_MODEL, DEFAULT_MIN_CONFIDENCE
-from utils.document_parser import DocPara, extract_docx_paragraphs, paragraphs_to_full_text
+from utils.document_parser import (
+    DocPara,
+    extract_docx_paragraphs,
+    paragraphs_to_full_text,
+    paragraphs_to_structured_docx_view,
+)
 
 from .classifier import TARGETS, llm_detect_structure
 
@@ -61,7 +66,7 @@ def check_structure_docx(
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     parsed_paras: Optional[List[DocPara]] = None,
 ) -> Report:
-    """Check paper structure by sending the full DOCX text to the LLM."""
+    """Check paper structure by sending a structured DOCX view to the LLM."""
     if not path or not isinstance(path, str):
         raise ValueError(f"Invalid path type: {type(path)}")
 
@@ -82,14 +87,16 @@ def check_structure_docx(
     full_text = paragraphs_to_full_text(paras)
     if not full_text:
         return Report(file=str(p), ok=False, sections=_init_hits(), notes=["Empty DOCX"])
+    docx_view = paragraphs_to_structured_docx_view(paras)
 
     notes.append(f"full_text_chars={len(full_text)}")
     notes.append(f"full_text_paragraphs={len(paras)}")
+    notes.append(f"docx_view_chars={len(docx_view)}")
 
     hits = _init_hits()
 
     try:
-        llm_out = llm_detect_structure(view_text=full_text, openai_model=openai_model)
+        llm_out = llm_detect_structure(view_text=docx_view, openai_model=openai_model)
     except Exception as e:
         logger.exception("LLM detect_structure failed")
         notes.append(f"LLM error: {e}")
