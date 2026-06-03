@@ -3,7 +3,7 @@
 import logging
 from typing import Optional, Tuple
 
-from .config import API_KEY, API_USER, OPENAI_API_KEY
+from .config import OPENAI_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -36,32 +36,6 @@ def validate_openai_api_key() -> Tuple[bool, Optional[str], Optional[str]]:
     return True, api_key, None
 
 
-def validate_plagiarism_api_credentials() -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
-    api_key = API_USER
-    api_secret = API_KEY
-
-    if not api_key or not api_secret:
-        missing = []
-        if not api_key:
-            missing.append("TURNITIN_API_KEY")
-        if not api_secret:
-            missing.append("TURNITIN_API_SECRET")
-
-        logger.error(f"Missing Turnitin credentials: {', '.join(missing)}")
-        return False, None, None, f"Thiếu thông tin API trong .env: {', '.join(missing)}"
-
-    if len(api_key) < 5:
-        logger.error("TURNITIN_API_KEY is too short (likely invalid)")
-        return False, None, None, "TURNITIN_API_KEY quá ngắn (không hợp lệ)"
-
-    if len(api_secret) < 10:
-        logger.error("TURNITIN_API_SECRET is too short (likely invalid)")
-        return False, None, None, "TURNITIN_API_SECRET quá ngắn (không hợp lệ)"
-
-    logger.debug("Turnitin API credentials validated")
-    return True, api_key, api_secret, None
-
-
 def get_user_friendly_error(exception: Exception) -> str:
     """Map lỗi phổ biến sang thông báo dễ hiểu (best-effort)."""
     error_str = str(exception).lower()
@@ -78,20 +52,6 @@ def get_user_friendly_error(exception: Exception) -> str:
     if "openai" in error_str and "timeout" in error_str:
         logger.warning(f"OpenAI timeout: {exception}")
         return "Kết nối OpenAI bị timeout. Vui lòng kiểm tra kết nối mạng."
-
-    # Turnitin/iThenticate errors
-    if "turnitin" in error_str and ("401" in error_str or "authentication" in error_str):
-        logger.warning(f"Turnitin authentication failed: {exception}")
-        return "Xác thực Turnitin/iThenticate thất bại. Vui lòng kiểm tra API credentials trong .env"
-
-    if "turnitin" in error_str and "timeout" in error_str:
-        logger.warning(f"Turnitin timeout: {exception}")
-        return "Kết nối Turnitin bị timeout. Vui lòng thử lại sau."
-
-    # LanguageTool / Java local server
-    if "languagetool" in error_str or "java" in error_str:
-        logger.warning(f"LanguageTool error: {exception}")
-        return "Lỗi khởi động LanguageTool. Vui lòng kiểm tra Java và thử lại."
 
     # File I/O
     if "file not found" in error_str or "no such file" in error_str:

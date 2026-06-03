@@ -38,10 +38,6 @@ TARGETS = [
     ("results", "Kết quả và thảo luận"),
     ("conclusion", "Kết luận"),
     ("references", "Tài liệu tham khảo"),
-    ("appendix", "Phụ lục"),
-    ("contributions", "Tuyên bố về đóng góp khoa học"),
-    ("conflict_of_interest", "Cam kết về mâu thuẫn lợi ích"),
-    ("acknowledgements", "Lời cảm ơn"),
 ]
 
 TARGET_IDS = [key for key, _label in TARGETS]

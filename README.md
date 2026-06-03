@@ -1,134 +1,82 @@
 # ArticleCheck AI
 
-Hệ thống kiểm tra bài báo khoa học tự động với AI - công cụ toàn diện để kiểm tra cấu trúc, chính tả và đạo văn cho các bài báo khoa học tiếng Việt và tiếng Anh.
+Ứng dụng Streamlit dùng AI để kiểm tra cấu trúc bài báo khoa học từ file DOCX.
 
-## Tính năng chính
+## Tính Năng Chính
 
-### Kiểm tra cấu trúc
+### Kiểm Tra Cấu Trúc
 
-Phát hiện các phần bắt buộc còn thiếu trong bài báo: Tựa đề, Tóm tắt, Từ khóa, Tài liệu tham khảo. Hệ thống kiểm tra cả song ngữ Việt-Anh và sử dụng LLM để phân loại các phần trong văn bản một cách thông minh.
+Hệ thống phát hiện các phần bắt buộc trong bài báo khoa học:
 
-### Kiểm tra chính tả
+- Tiêu đề tiếng Việt
+- Tiêu đề tiếng Anh
+- Tác giả và thông tin liên hệ
+- Tóm tắt tiếng Việt
+- Tóm tắt tiếng Anh
+- Từ khóa tiếng Việt
+- Từ khóa tiếng Anh
+- Giới thiệu
+- Vật liệu và/hoặc phương pháp nghiên cứu
+- Kết quả và thảo luận
+- Kết luận
+- Tài liệu tham khảo
 
-Người dùng chọn ngôn ngữ kiểm tra trong sidebar. App chỉ chạy checker tương ứng với ngôn ngữ đã chọn:
+Ứng dụng đọc nội dung DOCX, tạo view có cấu trúc từ các đoạn văn, sau đó dùng LLM để phân loại từng mục và trả về bảng trạng thái.
 
-**Tiếng Anh**: Tích hợp LanguageTool local server để kiểm tra lỗi chính tả tiếng Anh. Các lỗi tiếng Anh được highlight màu đỏ.
+## Cài Đặt
 
-**Tiếng Việt**: Sử dụng Hunspell với từ điển tiếng Việt để kiểm tra lỗi chính tả theo danh sách từ hợp lệ.
-
-Khi chọn tiếng Anh, lỗi được highlight màu đỏ. Khi chọn tiếng Việt, lỗi được highlight màu vàng.
-
-### Kiểm tra đạo văn
-
-Tích hợp API kiểm soát đạo văn Turnitin/iThenticate chuẩn quốc tế với các tính năng:
-- Upload nguyên file DOCX lên Turnitin/iThenticate như một submission duy nhất.
-- Poll trạng thái report đến khi Turnitin/iThenticate trả kết quả hoàn tất.
-- Chuẩn hóa kết quả trả về để UI hiển thị tỷ lệ trùng lặp, nguồn liên quan và link report.
-
-## Cài đặt
-
-### Yêu cầu
+### Yêu Cầu
 
 - Python 3.8 trở lên
-- Java 17 trở lên (dùng cho LanguageTool local server)
+- OpenAI API key
 
-### Các bước cài đặt
+### Tạo Môi Trường
 
-Clone repository:
-```bash
-git clone https://github.com/ductruong912/spell-check-paper.git
-cd spell-check-paper
-```
-
-Cài đặt dependencies Python:
 ```bash
 python -m venv venv
 python.exe -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Tạo file `.env` trong thư mục gốc với nội dung:
+Tạo file `.env` trong thư mục gốc:
+
 ```bash
-cp .env.excample .env
+OPENAI_API_KEY=sk-...
 ```
 
-Lấy API keys:
-- OpenAI: https://platform.openai.com/api-keys
-- Turnitin/iThenticate: Cung cấp API Key và Secret do trường đại học hoặc tổ chức cấp.
+### Chạy Ứng Dụng
 
-Chạy ứng dụng:
 ```bash
 streamlit run app.py
 ```
 
-Mở trình duyệt tại http://localhost:8502
+Mở trình duyệt tại địa chỉ Streamlit hiển thị trong terminal.
 
-Port mặc định được cấu hình trong `.streamlit/config.toml`:
+## Cấu Trúc Dự Án
 
-```toml
-[server]
-address = "0.0.0.0"
-port = 8502
-```
-
-## Cấu trúc dự án
-
-```
-spell-check-paper/
-├── app.py                      # Streamlit main app
-├── requirements.txt            # Python dependencies
-├── .env                        # API configuration
-├── .gitignore
-│
+```text
+.
+├── app.py
+├── requirements.txt
 ├── src/
-│   ├── document_backend.py    # Document processing orchestration
-│   │
-│   ├── structure/             # Structure checking
-│   │   ├── classifier.py      # LLM-based section classification
-│   │   ├── prompt.py          # Prompts for structure classification
-│   │   └── checker.py         # Structure validation
-│   │
-│   ├── spell/                 # Spell checking
-│   │   ├── checker.py         # Orchestration
-│   │   ├── pipeline.py        # Language-selected spell pipeline (EN or VI)
-│   │   ├── english_languagetool.py
-│   │   ├── vietnamese_hunspell.py
-│   │   ├── tokenizer.py
-│   │   ├── reference_finder.py
-│   │   └── models.py
-│   │
-│   ├── plagiarism/            # Plagiarism checking
-│   │   ├── api_client.py      # Turnitin/iThenticate API
-│   │   └── checker.py         # Check orchestration
-│   │
-│   ├── ui/                    # UI components
-│   │   ├── components.py      # HTML rendering
-│   │   ├── handlers.py        # Streamlit handlers
-│   │   ├── layout.py          # Results display
-│   │   └── render.py          # Render functions for spell check and plagiarism
-│   │
-│   └── utils/                 # Utilities
-│       ├── config.py          # Configuration
-│       ├── document_parser.py # Document caching/parsing
-│       └── validation.py      # API validation
-│
-└── tests/                     # Unit tests
+│   ├── document_backend.py
+│   ├── structure/
+│   │   ├── classifier.py
+│   │   ├── checker.py
+│   │   └── prompt.py
+│   ├── ui/
+│   │   ├── handlers.py
+│   │   ├── layout.py
+│   │   └── render.py
+│   └── utils/
+│       ├── config.py
+│       ├── document_parser.py
+│       └── validation.py
+└── tests/
 ```
 
-## Cấu hình
-### Logging
+## Sử Dụng
 
-Mặc định logging ở mức INFO. Để debug, mở `app.py` và đổi thành:
-```python
-logging.basicConfig(level=logging.DEBUG)
-```
-
-## Sử dụng
-
-Upload file DOCX (tối đa 200MB), chọn các loại kiểm tra cần thực hiện:
-
-- **Kiểm tra cấu trúc**: Phát hiện phần thiếu (Tựa đề VI/EN, Tóm tắt, Từ khóa, Tài liệu tham khảo)
-- **Kiểm tra chính tả**: Chọn Tiếng Anh hoặc Tiếng Việt; app chỉ chạy checker của ngôn ngữ đã chọn.
-- **Kiểm tra đạo văn**: Tỷ lệ trùng lặp và danh sách nguồn
-
-Kết quả hiển thị ngay trên web interface với highlight màu cho từng loại lỗi.
+1. Upload file DOCX trong sidebar.
+2. Bấm **Kiểm tra cấu trúc**.
+3. Xem nội dung tài liệu và bảng trạng thái các mục bắt buộc.

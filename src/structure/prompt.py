@@ -74,19 +74,6 @@ CÁC FIELD CẦN NHẬN DIỆN:
 - True nếu có section "Tài liệu tham khảo", "References", hoặc "Bibliography" kèm danh sách nguồn.
 - Heading tài liệu tham khảo đứng một mình chưa đủ; phải có danh sách nguồn phía sau.
 
-13) appendix:
-- True nếu có section "Phụ lục" hoặc "Appendix".
-
-14) contributions:
-- True nếu có tuyên bố đóng góp khoa học riêng biệt: "Contributions", "Đóng góp", "Novelty".
-- Không suy luận từ nội dung chung nếu không có tuyên bố riêng.
-
-15) conflict_of_interest:
-- True nếu có tuyên bố mâu thuẫn lợi ích/conflict of interest riêng biệt.
-
-16) acknowledgements:
-- True nếu có section "Lời cảm ơn", "Acknowledgements", hoặc "Acknowledgments".
-
 REFERENCES_STYLE (Trường `references_style` trong JSON output):
 - Nhiệm vụ cực kỳ quan trọng: Bạn BẮT BUỘC phải nhận diện định dạng tài liệu tham khảo.
 - Chỉ chọn một trong các giá trị chính xác sau: "APA", "IEEE", "Chicago", "Vancouver", "Unknown".
