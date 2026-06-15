@@ -1,5 +1,10 @@
 """Module kiểm tra cấu trúc bài báo (LLM-first)."""
-from .checker import check_structure_docx
-from utils.document_parser import extract_docx_paragraphs
+from .checker import check_structure_docx, check_structure_document
+from .models import SectionHit, StructureReport
 
-__all__ = ["check_structure_docx", "extract_docx_paragraphs"]
+__all__ = [
+    "SectionHit",
+    "StructureReport",
+    "check_structure_document",
+    "check_structure_docx",
+]

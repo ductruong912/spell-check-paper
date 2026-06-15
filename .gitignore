@@ -3,6 +3,7 @@
 /corpus/
 /test/
 /.cache/
+/.mcp.json
 
 # Python cache files
 __pycache__/
@@ -14,5 +15,6 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
-/data/model
+/data
 .codegraph/
+.superpowers/

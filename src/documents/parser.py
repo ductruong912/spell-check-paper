@@ -1,11 +1,12 @@
-"""DOCX paragraph parsing helpers for structure checks."""
+"""Document paragraph parsing and canonical document views."""
 
 from __future__ import annotations
 
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 from xml.sax.saxutils import escape, quoteattr
 
 from docx import Document
@@ -23,7 +24,16 @@ class DocPara:
     xml_path: str = ""
 
 
-def _norm_ws(s: str) -> str:
+@dataclass
+class DocumentView:
+    raw_text: str
+    structured_text: str
+    paragraphs: List[DocPara]
+    source_type: str
+    metadata: Dict[str, Any]
+
+
+def normalize_whitespace(s: str) -> str:
     """Normalize whitespace while preserving paragraph boundaries."""
     s = (s or "").replace("\u00A0", " ")
     s = re.sub(r"[ \t]+", " ", s).strip()
@@ -36,11 +46,11 @@ def _collect_header_footer_text(doc: Document) -> set[str]:
     try:
         for sec in doc.sections:
             for p in sec.header.paragraphs:
-                t = _norm_ws(p.text)
+                t = normalize_whitespace(p.text)
                 if t:
                     hf_texts.add(t)
             for p in sec.footer.paragraphs:
-                t = _norm_ws(p.text)
+                t = normalize_whitespace(p.text)
                 if t:
                     hf_texts.add(t)
     except Exception:
@@ -164,7 +174,7 @@ def _doc_para_from_paragraph(
     numbering_formats: Dict[Tuple[str, str], Tuple[str, str, int]],
     numbering_counters: Dict[Tuple[str, str], int],
 ) -> Optional[DocPara]:
-    t = _norm_ws(p.text)
+    t = normalize_whitespace(p.text)
     if not t:
         return None
     if t in hf_texts:
@@ -216,17 +226,93 @@ def extract_docx_paragraphs(path: str) -> List[DocPara]:
     return out
 
 
+def extract_pdf_paragraphs(path: str) -> List[DocPara]:
+    """Read a text-layer PDF into normalized content blocks."""
+    import fitz
+
+    page_blocks = []
+    furniture_pages: Dict[str, set[int]] = defaultdict(set)
+
+    def furniture_key(text: str) -> str:
+        return re.sub(r"\s+", " ", text).strip()
+
+    def is_margin_block(block, page_height: float, ratio: float) -> bool:
+        return float(block[1]) < page_height * ratio or float(block[3]) > page_height * (1.0 - ratio)
+
+    flags = fitz.TEXTFLAGS_BLOCKS | fitz.TEXT_DEHYPHENATE
+    with fitz.open(path) as pdf:
+        for page_index, page in enumerate(pdf, start=1):
+            blocks = page.get_text("blocks", sort=False, flags=flags)
+            page_height = float(page.rect.height)
+            page_blocks.append((page_index, page_height, blocks))
+
+            for block in blocks:
+                if len(block) < 5 or not is_margin_block(block, page_height, 0.12):
+                    continue
+                text = normalize_whitespace(str(block[4] or ""))
+                if text:
+                    furniture_pages[furniture_key(text)].add(page_index)
+
+    repeated_furniture = {
+        key for key, page_indexes in furniture_pages.items() if len(page_indexes) >= 2
+    }
+
+    out: List[DocPara] = []
+    for page_index, page_height, blocks in page_blocks:
+        for block_index, block in enumerate(blocks, start=1):
+            if len(block) < 5:
+                continue
+
+            text = normalize_whitespace(str(block[4] or ""))
+            if not text:
+                continue
+
+            key = furniture_key(text)
+            is_page_number = text.strip().isdigit() and is_margin_block(
+                block,
+                page_height,
+                0.15,
+            )
+            is_repeated_furniture = (
+                is_margin_block(block, page_height, 0.12)
+                and key in repeated_furniture
+            )
+            if is_page_number or is_repeated_furniture:
+                continue
+
+            out.append(
+                DocPara(
+                    text=text,
+                    style="",
+                    heading_level=0,
+                    block_type="pdf_block",
+                    xml_path=f"page[{page_index}]/block[{block_index}]",
+                )
+            )
+    return out
+
+
+def extract_document_paragraphs(path: str) -> List[DocPara]:
+    """Read a supported document into normalized paragraphs."""
+    suffix = Path(path).suffix.lower()
+    if suffix == ".docx":
+        return extract_docx_paragraphs(path)
+    if suffix == ".pdf":
+        return extract_pdf_paragraphs(path)
+    raise ValueError(f"Unsupported file type: {suffix}")
+
+
 def paragraphs_to_full_text(paras: List[DocPara]) -> str:
     """Join parsed paragraphs into the full paper text sent to the LLM."""
-    chunks = [_norm_ws(p.text) for p in paras if p.text and p.text.strip()]
-    return _norm_ws("\n".join(chunk for chunk in chunks if chunk))
+    chunks = [normalize_whitespace(p.text) for p in paras if p.text and p.text.strip()]
+    return normalize_whitespace("\n".join(chunk for chunk in chunks if chunk))
 
 
-def paragraphs_to_structured_docx_view(paras: List[DocPara]) -> str:
+def paragraphs_to_structured_document_view(paras: List[DocPara], *, source_type: str = "document") -> str:
     """Render parsed paragraphs as a compact XML-like view for the LLM."""
-    lines = ["<DOCX_STRUCTURE>"]
+    lines = [f"<DOCUMENT_STRUCTURE source={quoteattr(source_type)}>"]
     for index, para in enumerate(paras, start=1):
-        text = _norm_ws(para.text)
+        text = normalize_whitespace(para.text)
         if not text:
             continue
         attrs = [
@@ -237,5 +323,38 @@ def paragraphs_to_structured_docx_view(paras: List[DocPara]) -> str:
             f"path={quoteattr(para.xml_path or '')}",
         ]
         lines.append(f"  <p {' '.join(attrs)}>{escape(text)}</p>")
-    lines.append("</DOCX_STRUCTURE>")
+    lines.append("</DOCUMENT_STRUCTURE>")
     return "\n".join(lines)
+
+
+def paragraphs_to_structured_docx_view(paras: List[DocPara]) -> str:
+    """Render DOCX paragraphs as a compact XML-like view for compatibility."""
+    return paragraphs_to_structured_document_view(paras, source_type="docx")
+
+
+def build_document_view_from_paragraphs(
+    paras: List[DocPara],
+    *,
+    source_type: str = "document",
+) -> DocumentView:
+    """Build the canonical document view consumed by structure checks."""
+    raw_text = paragraphs_to_full_text(paras)
+    structured_text = paragraphs_to_structured_document_view(paras, source_type=source_type)
+    return DocumentView(
+        raw_text=raw_text,
+        structured_text=structured_text,
+        paragraphs=paras,
+        source_type=source_type,
+        metadata={
+            "paragraph_count": len(paras),
+            "raw_text_chars": len(raw_text),
+            "structured_text_chars": len(structured_text),
+        },
+    )
+
+
+def build_document_view(path: str) -> DocumentView:
+    """Read a supported document file into the canonical document view."""
+    source_type = Path(path).suffix.lower().lstrip(".") or "document"
+    paras = extract_document_paragraphs(path)
+    return build_document_view_from_paragraphs(paras, source_type=source_type)

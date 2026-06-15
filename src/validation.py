@@ -1,15 +1,17 @@
-"""Xác thực API và map lỗi kỹ thuật -> thông báo tiếng Việt."""
+"""Validate API configuration and map technical errors to user-facing messages."""
+
+from __future__ import annotations
 
 import logging
 from typing import Optional, Tuple
 
-from .config import OPENAI_API_KEY
+from config import OPENAI_API_KEY
 
 logger = logging.getLogger(__name__)
 
 
 class APIValidationError(Exception):
-    """Lỗi cấu hình API (kèm message VI/EN)."""
+    """API configuration error with Vietnamese and English messages."""
 
     def __init__(self, message_vi: str, message_en: str):
         self.message_vi = message_vi
@@ -37,44 +39,40 @@ def validate_openai_api_key() -> Tuple[bool, Optional[str], Optional[str]]:
 
 
 def get_user_friendly_error(exception: Exception) -> str:
-    """Map lỗi phổ biến sang thông báo dễ hiểu (best-effort)."""
+    """Map common technical errors to a Vietnamese message."""
     error_str = str(exception).lower()
 
-    # OpenAI errors
     if "429" in error_str or "quota" in error_str or "rate limit" in error_str:
-        logger.warning(f"OpenAI quota/rate limit exceeded: {exception}")
-        return "Đã vượt quá giới hạn API của OpenAI (hạn ngạch hoặc tốc độ). Vui lòng thử lại sau."
+        logger.warning("OpenAI quota/rate limit exceeded: %s", exception)
+        return "Đã vượt quá giới hạn API của OpenAI. Vui lòng thử lại sau."
 
     if "401" in error_str or "authentication" in error_str or "invalid_api_key" in error_str:
-        logger.warning(f"OpenAI authentication failed: {exception}")
-        return "Xác thực OpenAI thất bại. Vui lòng kiểm tra OPENAI_API_KEY trong .env"
+        logger.warning("OpenAI authentication failed: %s", exception)
+        return "Xác thực OpenAI thất bại. Vui lòng kiểm tra OPENAI_API_KEY trong .env."
 
     if "openai" in error_str and "timeout" in error_str:
-        logger.warning(f"OpenAI timeout: {exception}")
+        logger.warning("OpenAI timeout: %s", exception)
         return "Kết nối OpenAI bị timeout. Vui lòng kiểm tra kết nối mạng."
 
-    # File I/O
     if "file not found" in error_str or "no such file" in error_str:
-        logger.error(f"File not found: {exception}")
+        logger.error("File not found: %s", exception)
         return "Không tìm thấy file. Vui lòng kiểm tra lại đường dẫn."
 
     if "permission" in error_str or "access denied" in error_str:
-        logger.error(f"Permission denied: {exception}")
+        logger.error("Permission denied: %s", exception)
         return "Không có quyền truy cập file. Vui lòng kiểm tra quyền."
 
-    # DOCX/format
-    if "docx" in error_str or "corrupt" in error_str:
-        logger.error(f"Document format error: {exception}")
-        return "File DOCX bị lỗi hoặc không hợp lệ. Vui lòng thử file khác."
+    if "docx" in error_str or "pdf" in error_str or "corrupt" in error_str:
+        logger.error("Document format error: %s", exception)
+        return "File tài liệu bị lỗi hoặc không hợp lệ. Vui lòng thử file khác."
 
-    # Generic timeout/network
     if "timeout" in error_str:
-        logger.warning(f"Timeout error: {exception}")
+        logger.warning("Timeout error: %s", exception)
         return "Quá thời gian xử lý. Vui lòng thử lại hoặc sử dụng file nhỏ hơn."
 
     if "connection" in error_str or "network" in error_str:
-        logger.error(f"Network error: {exception}")
+        logger.error("Network error: %s", exception)
         return "Lỗi kết nối mạng. Vui lòng kiểm tra Internet."
 
-    logger.error(f"Unhandled error: {exception}")
+    logger.error("Unhandled error: %s", exception)
     return f"Lỗi không xác định: {str(exception)[:100]}"

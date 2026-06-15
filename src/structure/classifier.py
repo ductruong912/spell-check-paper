@@ -7,10 +7,15 @@ import logging
 import re
 from typing import Any, Dict
 
-from utils.config import DEFAULT_LLM_MODEL
-from utils.validation import APIValidationError, validate_openai_api_key
+from config import DEFAULT_LLM_MODEL
+from documents import normalize_whitespace
 
 from .prompt import build_structure_prompt
+from .template import (
+    STRUCTURE_TEMPLATE,
+    TARGETS_JSON,
+    TARGET_IDS,
+)
 
 logger = logging.getLogger("structure_checker.classifier")
 
@@ -22,45 +27,15 @@ except Exception:
     OPENAI_AVAILABLE = False
 
 
-# ----------------------------
-# Structure targets (fixed)
-# ----------------------------
-TARGETS = [
-    ("title_vi", "Tiêu đề tiếng Việt"),
-    ("title_en", "Tiêu đề tiếng Anh"),
-    ("authors", "Tác giả / Nhóm tác giả và thông tin liên hệ"),
-    ("abstract_vi", "Tóm tắt tiếng Việt"),
-    ("abstract_en", "Tóm tắt tiếng Anh"),
-    ("keywords_vi", "Từ khóa tiếng Việt"),
-    ("keywords_en", "Từ khóa tiếng Anh"),
-    ("introduction", "Giới thiệu / Đặt vấn đề"),
-    ("methods", "Vật liệu và/hoặc phương pháp nghiên cứu"),
-    ("results", "Kết quả và thảo luận"),
-    ("conclusion", "Kết luận"),
-    ("references", "Tài liệu tham khảo"),
-]
-
-TARGET_IDS = [key for key, _label in TARGETS]
-TARGETS_JSON = json.dumps([{"id": key, "label": label} for key, label in TARGETS], ensure_ascii=False)
-
 _EVIDENCE_MAX_CHARS = 100
 _REASON_MAX_CHARS = 100
 
 
-def _norm_ws(s: str) -> str:
-    """Chuẩn hoá khoảng trắng để prompt ổn định."""
-    s = (s or "").replace("\u00A0", " ")
-    s = re.sub(r"[ \t]+", " ", s).strip()
-    s = re.sub(r"\n{3,}", "\n\n", s).strip()
-    return s
-
-
 def _get_openai_client() -> OpenAI:
-    """Tạo OpenAI client sau khi validate API key."""
-    is_valid, api_key, error_msg = validate_openai_api_key()
-    if not is_valid:
-        raise APIValidationError(error_msg, f"OpenAI API validation failed: {error_msg}")
-    return OpenAI(api_key=api_key)
+    """Tạo OpenAI client sau khi validate API key (dùng helper chung trong llm)."""
+    from llm import create_openai_client
+
+    return create_openai_client()
 
 
 def _safe_load_json(text: str) -> Dict[str, Any]:
@@ -82,12 +57,7 @@ def _safe_load_json(text: str) -> Dict[str, Any]:
 
 def _normalize_output(data: Dict[str, Any]) -> Dict[str, Any]:
     """Chuẩn hoá output: đủ key, clamp confidence, cắt evidence/reason."""
-    out: Dict[str, Any] = {"sections": {}, "references_style": "Unknown"}
-
-    references_style = str((data or {}).get("references_style") or "Unknown").strip()
-    if references_style not in {"APA", "IEEE", "Chicago", "Vancouver", "Unknown"}:
-        references_style = "Unknown"
-    out["references_style"] = references_style
+    out: Dict[str, Any] = {"sections": {}}
 
     sec_map = (data or {}).get("sections") or {}
     for target_id in TARGET_IDS:
@@ -133,17 +103,13 @@ def _structure_response_format() -> Dict[str, Any]:
             "schema": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["sections", "references_style"],
+                "required": ["sections"],
                 "properties": {
                     "sections": {
                         "type": "object",
                         "additionalProperties": False,
                         "required": TARGET_IDS,
                         "properties": section_props,
-                    },
-                    "references_style": {
-                        "type": "string",
-                        "enum": ["APA", "IEEE", "Chicago", "Vancouver", "Unknown"],
                     },
                 },
             },
@@ -152,14 +118,18 @@ def _structure_response_format() -> Dict[str, Any]:
 
 
 def _build_structure_prompt(view_text: str) -> str:
-    return build_structure_prompt(view_text, TARGETS_JSON)
+    return build_structure_prompt(
+        view_text=view_text,
+        targets_json=TARGETS_JSON,
+        field_rules_text=STRUCTURE_TEMPLATE.field_rules_text,
+    )
 
 
 def llm_detect_structure(*, view_text: str, openai_model: str = DEFAULT_LLM_MODEL) -> Dict[str, Any]:
     if not OPENAI_AVAILABLE:
         raise RuntimeError("OPENAI_AVAILABLE=False (pip install openai)")
 
-    view_text = _norm_ws(view_text)
+    view_text = normalize_whitespace(view_text)
     if not view_text:
         return _normalize_output({})
 

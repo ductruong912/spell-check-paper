@@ -1,72 +1,57 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from utils.config import DEFAULT_LLM_MODEL, DEFAULT_MIN_CONFIDENCE
-from utils.document_parser import (
+from config import DEFAULT_LLM_MODEL, DEFAULT_MIN_CONFIDENCE
+from documents import (
     DocPara,
-    extract_docx_paragraphs,
+    extract_document_paragraphs,
     paragraphs_to_full_text,
-    paragraphs_to_structured_docx_view,
+    paragraphs_to_structured_document_view,
 )
 
-from .classifier import TARGETS, llm_detect_structure
+from .classifier import llm_detect_structure
+from .models import SectionHit, StructureReport
+from .template import REQUIRED, REQUIRED_IDS, STRUCTURE_TEMPLATE, TARGETS
 
 logger = logging.getLogger("structure_checker")
-
-
-# ----------------------------
-# Data structures
-# ----------------------------
-@dataclass
-class SectionHit:
-    status: str  # "ok" | "missing"
-    evidence: str = ""
-    llm_confidence: float = 0.0
-    notes: str = ""
-    references_style: str = ""
-
-
-@dataclass
-class Report:
-    file: str
-    ok: bool
-    sections: Dict[str, SectionHit]
-    notes: List[str]
-
-
-REQUIRED_IDS = {
-    "title_vi",
-    "title_en",
-    "authors",
-    "abstract_vi",
-    "abstract_en",
-    "keywords_vi",
-    "keywords_en",
-    "introduction",
-    "methods",
-    "results",
-    "conclusion",
-    "references",
-}
-
-REQUIRED: Dict[str, bool] = {key: key in REQUIRED_IDS for key, _label in TARGETS}
 
 
 def _init_hits() -> Dict[str, SectionHit]:
     return {key: SectionHit(status="missing") for key, _label in TARGETS}
 
 
-def check_structure_docx(
+def _build_report(
+    *,
+    file: str,
+    ok: bool,
+    sections: Dict[str, SectionHit],
+    notes: List[str],
+    error: Optional[str] = None,
+) -> StructureReport:
+    return StructureReport(
+        file=file,
+        ok=ok,
+        sections=sections,
+        template_name=STRUCTURE_TEMPLATE.name,
+        template_version=STRUCTURE_TEMPLATE.version,
+        required_ids=set(REQUIRED_IDS),
+        debug_info={"notes": notes},
+        error=error,
+        section_labels=dict(TARGETS),
+    )
+
+
+def check_structure_document(
     path: str,
     openai_model: str = DEFAULT_LLM_MODEL,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     parsed_paras: Optional[List[DocPara]] = None,
-) -> Report:
-    """Check paper structure by sending a structured DOCX view to the LLM."""
+    source_type: Optional[str] = None,
+) -> StructureReport:
+    """Check paper structure by sending a structured document view to the LLM."""
     if not path or not isinstance(path, str):
         raise ValueError(f"Invalid path type: {type(path)}")
 
@@ -75,36 +60,44 @@ def check_structure_docx(
         logger.error("File not found: %s", path)
         raise FileNotFoundError(f"File not found: {path}")
 
-    if p.suffix.lower() != ".docx":
-        raise ValueError(f"Only .docx is supported, got: {p.suffix}")
-
     notes: List[str] = [
         f"llm_model={openai_model}",
         f"min_confidence={min_confidence}",
     ]
 
-    paras = parsed_paras if parsed_paras is not None else extract_docx_paragraphs(str(p))
+    detected_source_type = source_type or p.suffix.lower().lstrip(".") or "document"
+    paras = parsed_paras if parsed_paras is not None else extract_document_paragraphs(str(p))
     full_text = paragraphs_to_full_text(paras)
     if not full_text:
-        return Report(file=str(p), ok=False, sections=_init_hits(), notes=["Empty DOCX"])
-    docx_view = paragraphs_to_structured_docx_view(paras)
+        return _build_report(
+            file=str(p),
+            ok=False,
+            sections=_init_hits(),
+            notes=["Empty document"],
+        )
+    document_view = paragraphs_to_structured_document_view(paras, source_type=detected_source_type)
 
     notes.append(f"full_text_chars={len(full_text)}")
     notes.append(f"full_text_paragraphs={len(paras)}")
-    notes.append(f"docx_view_chars={len(docx_view)}")
+    notes.append(f"document_view_chars={len(document_view)}")
 
     hits = _init_hits()
 
     try:
-        llm_out = llm_detect_structure(view_text=docx_view, openai_model=openai_model)
+        llm_out = llm_detect_structure(view_text=document_view, openai_model=openai_model)
     except Exception as e:
         logger.exception("LLM detect_structure failed")
         notes.append(f"LLM error: {e}")
         required_ids = [key for key, required in REQUIRED.items() if required]
-        return Report(file=str(p), ok=False, sections=hits, notes=notes + [f"Required: {required_ids}"])
+        return _build_report(
+            file=str(p),
+            ok=False,
+            sections=hits,
+            notes=notes + [f"Required: {required_ids}"],
+            error=str(e),
+        )
 
     sections = (llm_out or {}).get("sections") or {}
-    references_style = str((llm_out or {}).get("references_style") or "Unknown").strip() or "Unknown"
 
     for key, _label in TARGETS:
         item = sections.get(key) or {}
@@ -132,10 +125,23 @@ def check_structure_docx(
                 notes=reason,
             )
 
-    if hits.get("references") and hits["references"].status == "ok":
-        hits["references"].references_style = references_style
-
     required_ids = [key for key, required in REQUIRED.items() if required]
     ok = all(hits.get(key, SectionHit(status="missing")).status == "ok" for key in required_ids)
 
-    return Report(file=str(p), ok=ok, sections=hits, notes=notes)
+    return _build_report(file=str(p), ok=ok, sections=hits, notes=notes)
+
+
+def check_structure_docx(
+    path: str,
+    openai_model: str = DEFAULT_LLM_MODEL,
+    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+    parsed_paras: Optional[List[DocPara]] = None,
+) -> StructureReport:
+    """Check DOCX paper structure. Kept for backwards-compatible imports."""
+    return check_structure_document(
+        path,
+        openai_model=openai_model,
+        min_confidence=min_confidence,
+        parsed_paras=parsed_paras,
+        source_type="docx",
+    )

@@ -1,0 +1,120 @@
+{
+  "name": "default-paper-structure",
+  "version": 1,
+  "sections": [
+    {
+      "id": "title_vi",
+      "label": "Tiêu đề tiếng Việt",
+      "required": true,
+      "rules": [
+        "Tiêu đề tiếng Việt là một dòng/cụm tiêu đề độc lập, thường gần đầu bài.",
+        "Có thể xuất hiện trước hoặc sau một số metadata tùy template, nhưng phải có vai trò tiêu đề rõ ràng.",
+        "Không lấy tên người, heading \"Tóm tắt\", \"Abstract\", hoặc \"Summary\" làm tiêu đề.",
+        "Không lấy câu trong abstract/body làm tiêu đề."
+      ]
+    },
+    {
+      "id": "title_en",
+      "label": "Tiêu đề tiếng Anh",
+      "required": true,
+      "rules": [
+        "Tiêu đề tiếng Anh là một dòng/cụm tiêu đề độc lập bằng tiếng Anh, thường gần đầu bài.",
+        "Có thể đứng trước/sau title_vi, tác giả, hoặc abstract_vi tùy template song ngữ.",
+        "Không lấy heading \"Abstract\" hoặc \"Summary\" làm tiêu đề.",
+        "Không lấy câu mở đầu hoặc bất kỳ nội dung nào trong block \"Abstract\"/\"Summary\" làm tiêu đề.",
+        "Nếu không có một dòng tiêu đề tiếng Anh độc lập, trả về present=false."
+      ]
+    },
+    {
+      "id": "authors",
+      "label": "Tác giả / Nhóm tác giả và thông tin liên hệ",
+      "required": true,
+      "rules": [
+        "present=true chỉ khi thấy tên tác giả/danh sách tác giả rõ ràng và thông tin đơn vị hoặc liên hệ.",
+        "Evidence bắt buộc phải chứa tên tác giả. Không dùng riêng dòng email, \"Corresponding author\", địa chỉ, affiliation, hoặc thông tin liên hệ làm bằng chứng.",
+        "Nếu tên tác giả nằm một dòng riêng và affiliation/contact nằm gần đó, dùng dòng tên tác giả làm evidence.",
+        "Nếu tên tác giả bị xoá nhưng email/contact vẫn còn, authors phải là present=false."
+      ]
+    },
+    {
+      "id": "abstract_vi",
+      "label": "Tóm tắt tiếng Việt",
+      "required": true,
+      "rules": [
+        "True nếu có block tóm tắt tiếng Việt rõ ràng, thường gần đầu bài và có heading \"Tóm tắt\".",
+        "Heading \"Tóm tắt\" đứng một mình chưa đủ; phải có nội dung tóm tắt đi kèm.",
+        "Không lấy abstract tiếng Anh làm abstract_vi."
+      ]
+    },
+    {
+      "id": "abstract_en",
+      "label": "Tóm tắt tiếng Anh",
+      "required": true,
+      "rules": [
+        "True nếu có block tóm tắt tiếng Anh rõ ràng, heading \"Abstract\" hoặc \"Summary\".",
+        "Heading \"Abstract\"/\"Summary\" đứng một mình chưa đủ; phải có nội dung tóm tắt đi kèm.",
+        "Không lấy tóm tắt tiếng Việt làm abstract_en."
+      ]
+    },
+    {
+      "id": "keywords_vi",
+      "label": "Từ khóa tiếng Việt",
+      "required": true,
+      "rules": [
+        "True nếu có dòng \"Từ khóa:\"/\"Từ khoá:\" kèm danh sách từ khóa tiếng Việt.",
+        "Heading \"Từ khóa\" không kèm danh sách từ khóa thì present=false.",
+        "Không lấy \"Keywords:\" làm keywords_vi."
+      ]
+    },
+    {
+      "id": "keywords_en",
+      "label": "Từ khóa tiếng Anh",
+      "required": true,
+      "rules": [
+        "True nếu có dòng \"Keywords:\" kèm danh sách từ khóa tiếng Anh.",
+        "Heading \"Keywords\" không kèm danh sách từ khóa thì present=false."
+      ]
+    },
+    {
+      "id": "introduction",
+      "label": "Giới thiệu / Đặt vấn đề",
+      "required": true,
+      "rules": [
+        "True nếu có heading/nội dung rõ ràng: \"Mở đầu\", \"Giới thiệu\", \"Introduction\", \"Đặt vấn đề\"."
+      ]
+    },
+    {
+      "id": "methods",
+      "label": "Vật liệu và/hoặc phương pháp nghiên cứu",
+      "required": true,
+      "rules": [
+        "True nếu có heading/nội dung rõ ràng: \"Phương pháp\", \"Vật liệu và phương pháp\", \"Methods\", \"Methodology\"."
+      ]
+    },
+    {
+      "id": "results",
+      "label": "Kết quả và thảo luận",
+      "required": true,
+      "rules": [
+        "True nếu có heading/nội dung rõ ràng: \"Kết quả\", \"Thảo luận\", \"Results\", \"Discussion\", \"Evaluation\"."
+      ]
+    },
+    {
+      "id": "conclusion",
+      "label": "Kết luận",
+      "required": true,
+      "rules": [
+        "True nếu có heading/nội dung rõ ràng: \"Kết luận\", \"Conclusion\"."
+      ]
+    },
+    {
+      "id": "references",
+      "label": "Tài liệu tham khảo",
+      "required": true,
+      "rules": [
+        "True nếu có section \"Tài liệu tham khảo\", \"References\", hoặc \"Bibliography\" kèm danh sách nguồn.",
+        "Heading tài liệu tham khảo đứng một mình chưa đủ; phải có danh sách nguồn phía sau."
+      ]
+    }
+  ]
+}

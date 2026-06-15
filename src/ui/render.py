@@ -1,79 +1,226 @@
 """Progressive render helpers for the Streamlit UI."""
+
 from __future__ import annotations
 
 import html
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from ui.layout import render_structure_section
+from documents import DocumentPreview
+from ui.layout import structure_section_html
+
+
+PDF_PREVIEW_HEIGHT = 950
+
+
+@dataclass(frozen=True)
+class DocumentActionState:
+    title: str
+    subtitle: str
+    show_structure_check: bool = False
+
+
+_ACTION_STATES = {
+    "idle": DocumentActionState(
+        title="Chưa có tài liệu",
+        subtitle="Chọn file DOCX hoặc PDF để tạo bản xem trước",
+    ),
+    "preparing": DocumentActionState(
+        title="Đang chuẩn bị tài liệu",
+        subtitle="Đang tạo bản xem trước và trích xuất nội dung",
+    ),
+    "ready": DocumentActionState(
+        title="Preview đã sẵn sàng",
+        subtitle="Xem lại tài liệu trước khi kiểm tra cấu trúc",
+        show_structure_check=True,
+    ),
+    "running": DocumentActionState(
+        title="Đang kiểm tra cấu trúc",
+        subtitle="Vui lòng đợi trong giây lát",
+    ),
+    "timeout": DocumentActionState(
+        title="Kiểm tra quá thời gian",
+        subtitle="Preview vẫn được giữ để bạn xem lại",
+    ),
+    "error": DocumentActionState(
+        title="Không thể hoàn tất",
+        subtitle="Đổi tài liệu hoặc kiểm tra lại cấu hình backend",
+    ),
+}
+
+
+def document_action_state(review_state: str) -> DocumentActionState:
+    return _ACTION_STATES.get(review_state, _ACTION_STATES["idle"])
 
 _IFRAME_CSS = """
 <style>
 html, body { margin:0; padding:0; }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 1.55;
-}
+body { background:#e5eaed; color:#111827; font-family:"Times New Roman",Times,serif; font-size:16px; line-height:1.55; }
 .tnt-doc {
-  padding: 14px 16px;
-  max-height: 800px;
-  overflow: auto;
-  border-radius: 12px;
+  box-sizing:border-box; width:min(100%,794px); min-height:1123px; margin:16px auto;
+  padding:72px 76px; background:#fff; box-shadow:0 1px 8px rgba(0,0,0,.18);
 }
-@media (prefers-color-scheme: light) {
-  body { background: #ffffff; color: #111827; }
-  .tnt-doc { background: #ffffff; }
-}
-@media (prefers-color-scheme: dark) {
-  body { background: #0e1117; color: rgba(255,255,255,0.92); }
-  .tnt-doc { background: #0e1117; }
-}
+.tnt-doc img { max-width:100%; height:auto; }
+.tnt-doc table { width:100%; border-collapse:collapse; }
+.tnt-doc td,.tnt-doc th { border:1px solid #9ca3af; padding:4px 6px; }
+@media (max-width:700px) { .tnt-doc { margin:0; padding:24px; } }
 </style>
 """
+
+
+def _preview_source_label(preview: DocumentPreview, file_name: str) -> str:
+    suffix = file_name.lower().rsplit(".", 1)[-1] if "." in file_name else ""
+    if preview.kind == "pdf_pages":
+        return "PDF gốc" if suffix == "pdf" else "DOCX → PDF"
+    if preview.kind == "html":
+        return "DOCX → HTML"
+    return "Không khả dụng"
+
+
+def render_pdf_page_preview(pages: tuple[bytes, ...]) -> None:
+    with st.container(height=PDF_PREVIEW_HEIGHT, key="document_page_preview"):
+        for page in pages:
+            st.image(page, width="stretch", output_format="PNG")
+
+
+def _workspace_state_details(state: str) -> tuple[str, str, str]:
+    if state == "preparing":
+        return "", "Đang chuẩn bị", ""
+    if state == "ready":
+        return "", "Chờ kiểm tra", ""
+    if state == "running":
+        return "", "Đang xử lý", ""
+    if state == "timeout":
+        return "", "Quá thời gian", " tnt-chip--error"
+    if state == "error":
+        return "", "Có lỗi", " tnt-chip--error"
+    return "", "Hoàn tất", " tnt-chip--success"
+
+
+def render_workspace_header(
+    placeholder,
+    *,
+    file_name: str,
+    file_size: int,
+    word_count: int,
+    state: str,
+) -> None:
+    if not file_name:
+        placeholder.empty()
+        return
+
+    title = html.escape(file_name)
+    _, status_label, status_class = _workspace_state_details(state)
+    suffix = Path(file_name).suffix.lower().lstrip(".").upper() or "Tài liệu"
+    size_kb = file_size / 1024 if file_size else 0
+    chips = (
+        f'<span class="tnt-chip">{suffix} · {size_kb:,.1f} KB</span>'
+        f'<span class="tnt-chip">{int(word_count or 0):,} từ</span>'
+        f'<span class="tnt-chip{status_class}">{status_label}</span>'
+    )
+
+    placeholder.markdown(
+        '<div class="tnt-context">'
+        f'<div class="tnt-context__title">{title}</div>'
+        f'<div class="tnt-context__chips">{chips}</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_document(
     placeholder,
     *,
     file_name: str,
-    text: str,
+    preview: DocumentPreview | None,
     word_count: int,
 ) -> None:
     placeholder.empty()
     with placeholder.container():
-        st.subheader("Nội dung bài báo")
-        if not text:
-            st.info("Chưa có nội dung để hiển thị. Hãy upload DOCX và bấm **Kiểm tra cấu trúc**.")
+        if preview is None:
+            st.markdown(
+                '<div class="tnt-panel-head">'
+                '<span class="tnt-panel-head__title">Bản xem trước tài liệu</span>'
+                '<span class="tnt-panel-head__meta">Chưa có tài liệu</span>'
+                "</div>"
+                '<div class="tnt-empty"><strong>Tải bài báo lên để bắt đầu</strong></div>',
+                unsafe_allow_html=True,
+            )
             return
 
-        st.caption(f"File: {file_name}")
-        st.metric("Tổng số từ", f"{int(word_count or 0):,}")
+        notice = f'<div class="tnt-preview-notice">{preview.warning}</div>' if preview.warning else ""
+        if notice:
+            st.markdown(notice, unsafe_allow_html=True)
 
-        body = html.escape(text)
-        body = body.replace("\n", "<br>")
-        components.html(f"{_IFRAME_CSS}<div class='tnt-doc'>{body}</div>", height=820, scrolling=True)
+        if preview.kind == "unavailable":
+            st.warning(preview.warning or "Không thể hiển thị bản xem trước tài liệu.")
+            return
+
+        if preview.kind == "pdf_pages" and isinstance(preview.content, tuple):
+            render_pdf_page_preview(preview.content)
+            return
+
+        if preview.kind == "html" and isinstance(preview.content, str):
+            components.html(
+                f"{_IFRAME_CSS}<div class='tnt-doc'>{preview.content}</div>",
+                height=1100,
+                scrolling=True,
+            )
+
+
+def _structure_busy_html(state: str) -> str:
+    if state == "preparing":
+        title = "Đang chuẩn bị tài liệu"
+        summary = "Đang tạo bản xem trước và trích xuất nội dung..."
+    else:
+        title = "Đang kiểm tra cấu trúc"
+        summary = "Đang phân tích các mục yêu cầu trong tài liệu..."
+
+    return (
+        '<div class="tnt-results"><div class="tnt-results__head">'
+        '<div class="tnt-results__title-row">'
+        '<span class="tnt-spinner" aria-hidden="true"></span>'
+        f'<div class="tnt-results__title">{title}</div>'
+        "</div>"
+        f'<div class="tnt-results__summary">{summary}</div>'
+        '<div class="tnt-progress"><div class="tnt-progress__bar tnt-progress__bar--indeterminate"></div></div>'
+        "</div></div>"
+    )
+
+
+def _structure_error_html(message: str) -> str:
+    return (
+        '<div class="tnt-results tnt-results--error"><div class="tnt-results__head">'
+        '<div class="tnt-results__title">Không thể kiểm tra cấu trúc</div>'
+        f'<div class="tnt-results__summary">{html.escape(message)}</div>'
+        "</div></div>"
+    )
+
+
+def _structure_idle_html() -> str:
+    return (
+        '<div class="tnt-results"><div class="tnt-results__head">'
+        '<div class="tnt-results__title">Kết quả cấu trúc</div>'
+        '<div class="tnt-results__summary">Chưa kiểm tra cấu trúc.</div>'
+        "</div></div>"
+    )
 
 
 def render_structure(placeholder, *, data: Dict, state: str, error: str | None) -> None:
     """Render the structure result section by state."""
-    placeholder.empty()
-    with placeholder.container():
-        st.subheader("Cấu trúc bài báo")
-        if state == "running":
-            st.markdown(
-                """
-                <div class="tnt-loading">
-                  <div class="tnt-spin"></div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        elif state in ("error", "timeout") and not data:
-            st.error(error or "Không lấy được kết quả cấu trúc.")
-        elif state == "ok":
-            render_structure_section(data or {})
-        else:
-            st.caption("Chưa có kết quả.")
+    if state in ("preparing", "running"):
+        markup = _structure_busy_html(state)
+    elif state in ("error", "timeout"):
+        markup = _structure_error_html(
+            error or (data or {}).get("error") or "Không lấy được kết quả cấu trúc."
+        )
+    elif state == "ok":
+        markup = structure_section_html(data or {}) or _structure_idle_html()
+    else:
+        markup = _structure_idle_html()
+
+    placeholder.markdown(markup, unsafe_allow_html=True)
