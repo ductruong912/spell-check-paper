@@ -33,7 +33,7 @@ _REASON_MAX_CHARS = 100
 
 def _get_openai_client() -> OpenAI:
     """Tạo OpenAI client sau khi validate API key (dùng helper chung trong llm)."""
-    from llm import create_openai_client
+    from validation import create_openai_client
 
     return create_openai_client()
 

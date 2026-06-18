@@ -1,8 +1,7 @@
 import json
 from typing import Any
 
-from llm import create_openai_client, resolve_model
-from validation import APIValidationError
+from validation import APIValidationError, create_openai_client, resolve_model
 
 
 class OpenAIConfigurationError(RuntimeError):

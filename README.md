@@ -74,7 +74,7 @@ Dự án gộp hai phần dùng chung một cây mã nguồn trong `src/`:
 - **App kiểm tra cấu trúc** (Streamlit) — entrypoint `app.py`.
 - **Dịch vụ trích metadata & gợi ý tạp chí** (FastAPI) — entrypoint `main.py`, code trong `src/matching/`.
 
-Hai phần chia sẻ các tiện ích chung: `env.py` (đọc biến môi trường + nạp `.env`), `llm.py` (tạo OpenAI client), và `documents/` (trích xuất text PDF/DOCX).
+Hai phần chia sẻ các tiện ích chung: `config.py` (Settings + helper biến môi trường + nạp `.env`), `validation.py` (validate API key + tạo OpenAI client), và `documents/` (trích xuất text PDF/DOCX).
 
 ```text
 .
@@ -82,11 +82,9 @@ Hai phần chia sẻ các tiện ích chung: `env.py` (đọc biến môi trư�
 ├── main.py                    # FastAPI: /extract-metadata (metadata + matching)
 ├── requirements.txt
 ├── src/
-│   ├── config.py              # Settings cho app cấu trúc
-│   ├── env.py                 # Helper biến môi trường + nạp .env (dùng chung)
-│   ├── llm.py                 # Tạo OpenAI client (dùng chung)
+│   ├── config.py              # Settings + helper biến môi trường (.env)
 │   ├── services.py
-│   ├── validation.py
+│   ├── validation.py          # Validate API key + tạo OpenAI client + map lỗi
 │   ├── documents/
 │   │   ├── parser.py
 │   │   ├── extract.py         # Trích text dùng chung (PDF/DOCX → text)

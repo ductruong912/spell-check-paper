@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from env import env_float, env_int, env_str
+from config import env_float, env_int, env_str
 
 
 @dataclass(frozen=True)

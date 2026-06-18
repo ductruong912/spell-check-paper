@@ -10,8 +10,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-# Put the project's "src" dir on sys.path so the merged top-level packages
-# (matching, documents, config, ...) resolve, matching how app.py bootstraps.
 SRC_DIR = Path(__file__).resolve().parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -40,7 +38,7 @@ from services import detect_structure_bytes
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="Article Review API (metadata + structure)")
+app = FastAPI(title="Article Review API")
 
 
 class MatchResponse(BaseModel):
@@ -170,14 +168,7 @@ def _is_supported_document(filename: str) -> bool:
 
 @app.post("/check-structure")
 async def check_structure_endpoint(file: UploadFile = File(...)) -> dict[str, Any]:
-    """Run the LLM structure classifier on an uploaded DOCX/PDF and return its raw JSON.
-
-    The response is exactly what the classifier returned, with no thresholding and
-    no overall pass/fail::
-
-        {"sections": {"<section_id>": {"present": bool, "confidence": float,
-                                        "evidence": str, "reason": str}}}
-    """
+    """Run the LLM structure classifier on an uploaded DOCX/PDF and return its raw JSON."""
     filename = file.filename or ""
     data = await file.read()
     if not data:

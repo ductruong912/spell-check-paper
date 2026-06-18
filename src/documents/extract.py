@@ -28,6 +28,3 @@ def extract_text_from_bytes(file_name: str, content: bytes) -> str:
             os.remove(tmp_path)
         except OSError:
             pass
-
-
-__all__ = ["extract_text", "extract_text_from_bytes"]

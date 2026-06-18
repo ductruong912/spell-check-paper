@@ -161,17 +161,7 @@ def detect_structure_bytes(
     *,
     timeout_seconds: int | None = None,
 ) -> dict:
-    """Return the raw LLM structure-classifier JSON for uploaded bytes.
-
-    Output is the classifier result as-is::
-
-        {"sections": {section_id: {"present": bool, "confidence": float,
-                                    "evidence": str, "reason": str}}}
-
-    This does NOT apply the confidence threshold and does NOT add an overall
-    ``ok`` flag — it is exactly what the LLM classifier returned. Raises on
-    parse/LLM failure or timeout.
-    """
+    """Return the raw LLM structure-classifier JSON for uploaded bytes."""
     timeout = timeout_seconds or app_settings.structure_timeout_seconds
     tmp_path = write_temp_document(content, file_name)
     executor: ThreadPoolExecutor | None = None
@@ -196,12 +186,3 @@ def detect_structure_bytes(
                 executor.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 pass
-
-
-__all__ = [
-    "PreparedDocument",
-    "check_structure",
-    "detect_structure_bytes",
-    "file_signature",
-    "prepare_document",
-]

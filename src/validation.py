@@ -1,11 +1,11 @@
-"""Validate API configuration and map technical errors to user-facing messages."""
+"""OpenAI API access: validate configuration, build the client, map errors."""
 
 from __future__ import annotations
 
 import logging
 from typing import Optional, Tuple
 
-from config import OPENAI_API_KEY
+from config import OPENAI_API_KEY, settings
 
 logger = logging.getLogger(__name__)
 
@@ -76,3 +76,20 @@ def get_user_friendly_error(exception: Exception) -> str:
 
     logger.error("Unhandled error: %s", exception)
     return f"Lỗi không xác định: {str(exception)[:100]}"
+
+
+def create_openai_client():
+    """Validate the configured API key and return an OpenAI client."""
+    from openai import OpenAI
+
+    is_valid, api_key, error_msg = validate_openai_api_key()
+    if not is_valid:
+        raise APIValidationError(error_msg, f"OpenAI API validation failed: {error_msg}")
+    return OpenAI(api_key=api_key)
+
+
+def resolve_model(model: Optional[str] = None) -> str:
+    """Return the explicit model if given, otherwise the configured default."""
+    if model and model.strip():
+        return model.strip()
+    return settings.default_llm_model
