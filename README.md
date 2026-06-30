@@ -72,14 +72,14 @@ Mở trình duyệt tại địa chỉ Streamlit hiển thị trong terminal.
 Dự án gộp hai phần dùng chung một cây mã nguồn trong `src/`:
 
 - **App kiểm tra cấu trúc** (Streamlit) — entrypoint `app.py`.
-- **Dịch vụ trích metadata & gợi ý tạp chí** (FastAPI) — entrypoint `main.py`, code trong `src/matching/`.
+- **Dịch vụ kiểm tra cấu trúc + so khớp với kho bài hợp lệ** (FastAPI) — entrypoint `main.py`, code trong `src/structure/` và `src/matching/`.
 
 Hai phần chia sẻ các tiện ích chung: `config.py` (Settings + helper biến môi trường + nạp `.env`), `validation.py` (validate API key + tạo OpenAI client), và `documents/` (trích xuất text PDF/DOCX).
 
 ```text
 .
 ├── app.py                     # Streamlit: kiểm tra cấu trúc bài báo
-├── main.py                    # FastAPI: /extract-metadata (metadata + matching)
+├── main.py                    # FastAPI: /check-structure + /valid-papers/{ingest,match}
 ├── requirements.txt
 ├── src/
 │   ├── config.py              # Settings + helper biến môi trường (.env)
@@ -101,12 +101,11 @@ Hai phần chia sẻ các tiện ích chung: `config.py` (Settings + helper bi�
 │   │   ├── layout.py
 │   │   ├── render.py
 │   │   └── theme.py
-│   └── matching/              # Engine gợi ý tạp chí (gộp từ src1)
-│       ├── config.py          # MatchingConfig (biến MATCH_*)
-│       ├── models/matching.py
-│       ├── repositories/      # article.py, matching_index.py
-│       ├── services/          # embeddings, matching_engine, metadata_validation, prompt, text_extractors
-│       └── scripts/rebuild_matching_index.py
+│   └── matching/              # So title + keywords với kho bài hợp lệ
+│       ├── config.py          # ValidPaperConfig (biến VALID_*) + FieldRelevanceConfig (script offline)
+│       ├── models/matching.py # ValidPaperResult/Match, FieldRelevanceResult
+│       ├── repositories/      # valid_paper_store, field_vector_store, field_keywords
+│       └── services/          # embeddings, bm25, valid_paper_match, field_relevance
 └── tests/
 ```
 
@@ -123,15 +122,28 @@ Hai phần chia sẻ các tiện ích chung: `config.py` (Settings + helper bi�
 ```bash
 # Chạy API
 python main.py            # hoặc: uvicorn main:app --reload
-
-# Tạo chỉ mục matching từ data/journal_articles.json
-python src/matching/scripts/rebuild_matching_index.py
 ```
 
-Hai endpoint, đều nhận file DOCX/PDF (multipart) và trả JSON:
+Ba endpoint trả JSON:
 
-- `POST /extract-metadata` — trả title, keywords và (nếu đã build chỉ mục) kết quả gợi ý tạp chí. Cấu hình ngưỡng matching qua các biến `MATCH_*` trong `.env`.
-- `POST /check-structure` — trả về **nguyên JSON thô của LLM classifier**: mỗi mục có `present` (bool), `confidence` (0–1), `evidence`, `reason`. Không áp ngưỡng confidence và không có cờ tổng `ok` (client tự quyết dựa trên `confidence`). Mục `references` chỉ kiểm tra có/thiếu, không phân loại kiểu trích dẫn.
+- `POST /check-structure` (file DOCX/PDF, multipart) — trả về **nguyên JSON thô của LLM classifier**:
+  - `sections`: mỗi mục có `present` (bool), `confidence` (0–1), `evidence`, `reason`. Không áp ngưỡng confidence và không có cờ tổng `ok` (client tự quyết). Mục `references` chỉ kiểm tra có/thiếu.
+  - `extracted`: title + list keywords **đầy đủ** theo từng ngôn ngữ (`title_vi`, `title_en`, `keywords_vi`, `keywords_en`).
+  - `metadata`: bản gộp **ưu tiên EN** cho bài song ngữ (`title`, `keywords`, `language`, `title_source`, `keywords_source`) — dùng làm input cho `/valid-papers/match`.
+- `POST /valid-papers/ingest` (JSON) — nạp các bài **hợp lệ** vào kho vector (mỗi bài cần đủ `title` + ≥1 `keyword`). Body: `{"papers": [{"title": "...", "keywords": ["..."]}]}`. Trả `{ingested_papers, total_papers}`.
+- `POST /valid-papers/match` (JSON) — so `title` + `keywords` bản thảo với kho bài hợp lệ. `keywords` nhận **mảng** hoặc **chuỗi** phân tách `,`/`;`. Thêm `"explain": true` để xem chi tiết `matches`. Phải có ít nhất `title` hoặc một `keyword` (nếu không → 400).
+
+`/valid-papers/match` tách truy vấn thành **2 vector** (1 vector title, 1 vector gộp list keywords) rồi so độc lập với hai collection của kho. Điểm mỗi bản ghi = `VALID_SEMANTIC_WEIGHT`·cosine + `VALID_LEXICAL_WEIGHT`·BM25 (đã normalize 0–1 theo điểm cao nhất của truy vấn); lấy trung bình **top-`VALID_TOP_K`** bản ghi cao điểm nhất ra điểm từng mặt. `overall_score` = trung bình điểm title + keywords. Mặc định 0.7 semantic / 0.3 BM25, top-5. Kết quả:
+
+```json
+{
+  "overall_score": 0.83,
+  "title":    { "score": 0.81, "matches": [{"text": "...", "score": 0.81, "semantic": 0.86, "lexical": 0.70}] },
+  "keywords": { "score": 0.85, "matches": [{"text": "...", "score": 0.85, "semantic": 0.88, "lexical": 0.78}] }
+}
+```
+
+`matches` chỉ xuất hiện khi `explain=true`. Dùng chung model SBERT đa ngữ với field relevance (`FIELD_MODEL_NAME`); đổi model thì phải nạp lại kho. Các biến `FIELD_*` còn lại chỉ phục vụ script hiệu chỉnh offline `src/matching/scripts/calibrate_field_thresholds.py`, không còn endpoint.
 
 Ví dụ kết quả `POST /check-structure`:
 
@@ -139,8 +151,18 @@ Ví dụ kết quả `POST /check-structure`:
 {
   "sections": {
     "title_vi": {"present": true, "confidence": 0.95, "evidence": "...", "reason": "..."},
-    "references": {"present": true, "confidence": 0.9, "evidence": "[1] ...", "reason": "..."},
     "abstract_en": {"present": false, "confidence": 0.0, "evidence": "", "reason": "..."}
+  },
+  "extracted": {
+    "title_en": "Machine Learning in Healthcare",
+    "keywords_en": ["machine learning", "healthcare"]
+  },
+  "metadata": {
+    "language": "bilingual",
+    "title": "Machine Learning in Healthcare",
+    "keywords": ["machine learning", "healthcare"],
+    "title_source": "en",
+    "keywords_source": "en"
   }
 }
 ```

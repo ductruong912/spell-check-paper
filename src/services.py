@@ -16,6 +16,8 @@ from structure.checker import check_structure_document
 from structure.classifier import llm_detect_structure
 from structure.models import StructureReport
 from validation import get_user_friendly_error
+from matching.config import load_valid_paper_config
+from matching.services.valid_paper_match import get_valid_paper_matcher
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +175,32 @@ def detect_structure_bytes(
             view_text=document_view.structured_text,
             openai_model=app_settings.default_llm_model,
         )
-        return future.result(timeout=timeout)
+        result = future.result(timeout=timeout)
+        
+        # Thêm check domain match
+        metadata = result.get("metadata", {})
+        title = metadata.get("title")
+        keywords = metadata.get("keywords") or []
+        
+        try:
+            config = load_valid_paper_config()
+            matcher = get_valid_paper_matcher(config)
+            if matcher is not None:
+                match_result = matcher.match(title, keywords, explain=False)
+                domain_match_dict = {
+                    "overall_score": match_result.overall_score,
+                    "suitable": match_result.suitable,
+                    "title": {"score": match_result.title.score} if match_result.title else None,
+                    "keywords": {"score": match_result.keywords.score} if match_result.keywords else None,
+                }
+                result["domain_match"] = domain_match_dict
+            else:
+                result["domain_match"] = None
+        except Exception as e:
+            logger.warning("Domain match check failed: %s", e, exc_info=True)
+            result["domain_match"] = None
+            
+        return result
     finally:
         if tmp_path:
             try:

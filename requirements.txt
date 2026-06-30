@@ -19,6 +19,9 @@ openai==2.14.0
 sentence-transformers==5.5.1
 numpy==2.4.6
 
+# --- Vector store (danh mục từ khóa lĩnh vực) ---
+chromadb==1.5.9
+
 # --- Test ---
 pytest==9.0.2
 

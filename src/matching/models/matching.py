@@ -2,26 +2,40 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
-class JournalArticle:
-    article_id: str
-    title: str
-    keywords: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class MatchScore:
-    article_id: str
-    title: str
-    keywords: list[str]
+class FieldKeywordMatch:
+    term: str       # title/keyword của bài
+    keyword: str    # từ khóa lĩnh vực gần nghĩa nhất với term
     score: float
-    semantic_score: float
-    lexical_score: float
 
 
 @dataclass(frozen=True)
-class MatchingResult:
+class FieldRelevanceResult:
     decision: str
     score: float
     semantic_score: float
     lexical_score: float
-    top_matches: list[MatchScore] = field(default_factory=list)
+    matched_keywords: list[FieldKeywordMatch] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ValidPaperMatch:
+    text: str        # title hoặc list keywords của một bài hợp lệ trong kho
+    score: float     # điểm tổng hợp = semantic_weight*cosine + lexical_weight*BM25(norm)
+    semantic: float
+    lexical: float
+
+
+@dataclass(frozen=True)
+class ValidPaperSideResult:
+    """Kết quả một mặt (title hoặc keywords): trung bình top_k bản ghi cao điểm nhất."""
+
+    score: float
+    matches: list[ValidPaperMatch] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ValidPaperResult:
+    overall_score: float | None  # trung bình điểm title + keywords (mặt nào có)
+    suitable: bool | None = None
+    title: ValidPaperSideResult | None = None
+    keywords: ValidPaperSideResult | None = None

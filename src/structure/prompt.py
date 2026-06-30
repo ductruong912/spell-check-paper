@@ -22,6 +22,12 @@ Chỉ trả đúng một JSON object theo shape sau. Không Markdown, không cod
       "evidence": "trích nguyên văn ngắn nhất",
       "reason": "lý do ngắn, có thể nêu index/block"
     }
+  },
+  "extracted": {
+    "title_vi": "tiêu đề tiếng Việt đầy đủ, nguyên văn, hoặc null",
+    "title_en": "tiêu đề tiếng Anh đầy đủ, nguyên văn, hoặc null",
+    "keywords_vi": ["từng từ khóa tiếng Việt", "..."],
+    "keywords_en": ["each english keyword", "..."]
   }
 }
 
@@ -40,6 +46,14 @@ QUY TẮC OUTPUT:
 - Với các mục thân bài, ưu tiên section boundary rõ ràng: heading, heading_level, style, path, block, hoặc cụm tiêu đề độc lập.
 - Không lấy một câu nội dung ngẫu nhiên trong body làm section nếu không có section boundary rõ.
 - Với mục references (tài liệu tham khảo), present=true khi có section tài liệu tham khảo kèm danh sách nguồn; chỉ cần xác định có hay không, không cần phân loại kiểu trích dẫn.
+
+QUY TẮC EXTRACTED (dữ liệu title + keyword đầy đủ, dùng để so khớp lĩnh vực):
+- "extracted" độc lập với "evidence". Lấy ĐẦY ĐỦ nội dung, KHÔNG cắt 100 ký tự.
+- title_vi / title_en: lấy nguyên văn toàn bộ dòng tiêu đề tương ứng; null nếu không có tiêu đề ngôn ngữ đó.
+- keywords_vi: tách từng từ khóa trong dòng "Từ khóa:"/"Từ khoá:" thành từng phần tử mảng riêng; [] nếu không có.
+- keywords_en: tách từng từ khóa trong dòng "Keywords:"/"Index Terms:" thành từng phần tử mảng riêng; [] nếu không có.
+- Chỉ trích đúng nội dung xuất hiện trong DOCUMENT_STRUCTURE. KHÔNG dịch, KHÔNG tự suy luận, KHÔNG bịa.
+- Bài chỉ có một ngôn ngữ thì điền ngôn ngữ đó, để null/[] cho ngôn ngữ còn thiếu.
 
 CÁC FIELD CẦN NHẬN DIỆN:
 __FIELD_RULES__

@@ -17,13 +17,19 @@ class FakeEmbeddingProvider:
 
 
 class SbertEmbeddingProvider:
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, prefix: str = ""):
         from sentence_transformers import SentenceTransformer
 
         self.model = SentenceTransformer(model_name)
+        # Một số model (vd e5) yêu cầu tiền tố như "query: " trước mỗi câu;
+        # áp dụng đồng nhất cho cả từ khóa lĩnh vực lẫn term của bài.
+        self.prefix = prefix
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        embeddings = self.model.encode(texts, normalize_embeddings=True)
+        inputs = [self.prefix + text for text in texts] if self.prefix else texts
+        embeddings = self.model.encode(
+            inputs, normalize_embeddings=True, show_progress_bar=False
+        )
         return embeddings.tolist()
 
 

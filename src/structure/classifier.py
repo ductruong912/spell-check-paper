@@ -55,8 +55,73 @@ def _safe_load_json(text: str) -> Dict[str, Any]:
             return {}
 
 
+def _clean_str(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _clean_keyword_list(value: Any) -> list[str]:
+    """Bỏ keyword rỗng và trùng (so theo casefold), giữ nguyên thứ tự xuất hiện."""
+    if not isinstance(value, list):
+        return []
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        keyword = _clean_str(item)
+        if not keyword:
+            continue
+        key = keyword.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        keywords.append(keyword)
+    return keywords
+
+
+def _build_metadata(extracted: Dict[str, Any]) -> Dict[str, Any]:
+    """Gộp title + keyword đầy đủ, ưu tiên EN cho bài song ngữ, để so khớp lĩnh vực."""
+    title_vi, title_en = extracted["title_vi"], extracted["title_en"]
+    keywords_vi, keywords_en = extracted["keywords_vi"], extracted["keywords_en"]
+
+    has_en = bool(title_en or keywords_en)
+    has_vi = bool(title_vi or keywords_vi)
+    if has_en and has_vi:
+        language = "bilingual"
+    elif has_en:
+        language = "en"
+    elif has_vi:
+        language = "vi"
+    else:
+        language = "unknown"
+
+    # Bài song ngữ -> ưu tiên EN; thiếu EN thì fallback sang VI.
+    if title_en:
+        title, title_source = title_en, "en"
+    elif title_vi:
+        title, title_source = title_vi, "vi"
+    else:
+        title, title_source = None, None
+
+    if keywords_en:
+        keywords, keywords_source = keywords_en, "en"
+    elif keywords_vi:
+        keywords, keywords_source = keywords_vi, "vi"
+    else:
+        keywords, keywords_source = [], None
+
+    return {
+        "language": language,
+        "title": title,
+        "keywords": keywords,
+        "title_source": title_source,
+        "keywords_source": keywords_source,
+    }
+
+
 def _normalize_output(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Chuẩn hoá output: đủ key, clamp confidence, cắt evidence/reason."""
+    """Chuẩn hoá output: đủ key, clamp confidence, cắt evidence/reason, gộp metadata."""
     out: Dict[str, Any] = {"sections": {}}
 
     sec_map = (data or {}).get("sections") or {}
@@ -76,6 +141,16 @@ def _normalize_output(data: Dict[str, Any]) -> Dict[str, Any]:
             "reason": str(raw.get("reason") or "")[:_REASON_MAX_CHARS],
         }
 
+    raw_extracted = (data or {}).get("extracted") or {}
+    extracted = {
+        "title_vi": _clean_str(raw_extracted.get("title_vi")),
+        "title_en": _clean_str(raw_extracted.get("title_en")),
+        "keywords_vi": _clean_keyword_list(raw_extracted.get("keywords_vi")),
+        "keywords_en": _clean_keyword_list(raw_extracted.get("keywords_en")),
+    }
+    out["extracted"] = extracted
+    out["metadata"] = _build_metadata(extracted)
+
     return out
 
 
@@ -93,6 +168,20 @@ def _section_response_schema() -> Dict[str, Any]:
     }
 
 
+def _extracted_response_schema() -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title_vi", "title_en", "keywords_vi", "keywords_en"],
+        "properties": {
+            "title_vi": {"type": ["string", "null"]},
+            "title_en": {"type": ["string", "null"]},
+            "keywords_vi": {"type": "array", "items": {"type": "string"}},
+            "keywords_en": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+
+
 def _structure_response_format() -> Dict[str, Any]:
     section_props = {target_id: _section_response_schema() for target_id in TARGET_IDS}
     return {
@@ -103,7 +192,7 @@ def _structure_response_format() -> Dict[str, Any]:
             "schema": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["sections"],
+                "required": ["sections", "extracted"],
                 "properties": {
                     "sections": {
                         "type": "object",
@@ -111,6 +200,7 @@ def _structure_response_format() -> Dict[str, Any]:
                         "required": TARGET_IDS,
                         "properties": section_props,
                     },
+                    "extracted": _extracted_response_schema(),
                 },
             },
         },

@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sys
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
@@ -8,27 +9,17 @@ from typing import Any
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 SRC_DIR = Path(__file__).resolve().parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from matching.services.embeddings import SbertEmbeddingProvider
-from matching.config import load_matching_config
-from matching.services.matching_engine import MatchingEngine
-from matching.repositories.matching_index import load_articles_from_index
-from matching.services.metadata_validation import build_public_metadata
-from matching.services.prompt import (
-    OpenAIConfigurationError,
-    OpenAIResponseParseError,
-    extract_metadata_with_openai,
-)
-from matching.services.text_extractors import (
-    TextExtractionError,
-    UnsupportedFileTypeError,
-    extract_text_from_file,
-    prepare_text_for_llm,
+from matching.config import load_valid_paper_config
+from matching.services.valid_paper_match import (
+    get_valid_paper_matcher,
+    ingest_valid_titles,
+    ingest_valid_keywords,
 )
 
 from config import settings
@@ -38,127 +29,163 @@ from services import detect_structure_bytes
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="Article Review API")
+
+# Nhóm endpoint trên trang /docs — đặt tên rõ để dễ tìm thay vì để mặc định.
+TAGS_METADATA = [
+    {
+        "name": "Structure",
+    },
+    {
+        "name": "Valid papers",
+    },
+]
+
+app = FastAPI(title="Article Review API", openapi_tags=TAGS_METADATA)
 
 
-class MatchResponse(BaseModel):
-    article_id: str
-    title: str
-    keywords: list[str]
-    score: float
-    semantic_score: float
-    lexical_score: float
-
-
-class MatchingResponse(BaseModel):
-    decision: str
-    score: float
-    semantic_score: float
-    lexical_score: float
-    top_matches: list[MatchResponse] | None = None
-
-
-class MetadataResponse(BaseModel):
-    title: str | None
-    keywords: list[str]
-    matching: MatchingResponse | None = None
-
-
-def get_max_input_chars() -> int:
-    raw_value = os.getenv("MAX_INPUT_CHARS", "60000")
-    try:
-        value = int(raw_value)
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail="MAX_INPUT_CHARS must be an integer.") from exc
-    if value <= 0:
-        raise HTTPException(status_code=500, detail="MAX_INPUT_CHARS must be greater than zero.")
+def _split_keywords(value: Any) -> Any:
+    # Cho phép nạp keywords dạng chuỗi phân tách bằng "," hoặc ";"
+    # (khớp với data nguồn lưu keywords trong một ô) ngoài dạng mảng.
+    if isinstance(value, str):
+        return [part.strip() for part in re.split(r"[,;]", value) if part.strip()]
     return value
 
 
-def ensure_openai_api_key() -> None:
-    if not os.getenv("OPENAI_API_KEY"):
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is missing.")
+class ValidTitleIngestRequest(BaseModel):
+    titles: list[str]
+
+class KeywordCluster(BaseModel):
+    keywords: list[str] = []
+
+    @field_validator("keywords", mode="before")
+    @classmethod
+    def split_keyword_string(cls, value: Any) -> Any:
+        return _split_keywords(value)
+
+class ValidKeywordIngestRequest(BaseModel):
+    clusters: list[KeywordCluster]
+
+class ValidIngestResponse(BaseModel):
+    ingested_items: int
+    total_items: int
 
 
-def build_matching_response(title: str | None, keywords: list[str], explain: bool) -> dict[str, Any] | None:
-    config = load_matching_config()
-    articles = load_articles_from_index(config.index_dir)
-    if not articles:
+class ValidPaperMatchRequest(BaseModel):
+    title: str | None = None
+    keywords: list[str] = []
+    explain: bool = False
+
+    @field_validator("keywords", mode="before")
+    @classmethod
+    def split_keyword_string(cls, value: Any) -> Any:
+        return _split_keywords(value)
+
+
+class ValidPaperMatchItem(BaseModel):
+    text: str
+    score: float
+    semantic: float
+    lexical: float
+
+
+class ValidPaperSideResponse(BaseModel):
+    score: float
+    matches: list[ValidPaperMatchItem] | None = None
+
+
+class ValidPaperMatchResponse(BaseModel):
+    overall_score: float | None
+    title: ValidPaperSideResponse | None = None
+    keywords: ValidPaperSideResponse | None = None
+
+
+def _serialize_side(side: Any, explain: bool) -> dict[str, Any] | None:
+    if side is None:
         return None
-
-    provider = SbertEmbeddingProvider(config.model_name)
-    engine = MatchingEngine(articles, provider, config)
-    result = engine.match(title, keywords, explain=explain)
-    if result is None:
-        return None
-
-    payload: dict[str, Any] = {
-        "decision": result.decision,
-        "score": result.score,
-        "semantic_score": result.semantic_score,
-        "lexical_score": result.lexical_score,
-    }
+    payload: dict[str, Any] = {"score": side.score}
     if explain:
-        payload["top_matches"] = [
+        payload["matches"] = [
             {
-                "article_id": match.article_id,
-                "title": match.title,
-                "keywords": match.keywords,
+                "text": match.text,
                 "score": match.score,
-                "semantic_score": match.semantic_score,
-                "lexical_score": match.lexical_score,
+                "semantic": match.semantic,
+                "lexical": match.lexical,
             }
-            for match in result.top_matches
+            for match in side.matches
         ]
     return payload
 
 
 @app.post(
-    "/extract-metadata",
-    response_model=MetadataResponse,
-    response_model_exclude_unset=True,
+    "/valid-papers/ingest/titles",
+    response_model=ValidIngestResponse,
+    tags=["Valid papers"],
+    summary="Nạp danh sách các tiêu đề hợp lệ vào kho vector",
 )
-async def extract_metadata(
-    file: UploadFile = File(...),
-    explain: bool = False,
-) -> dict[str, Any]:
-    filename = file.filename or ""
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
+async def ingest_valid_titles_endpoint(request: ValidTitleIngestRequest) -> dict[str, int]:
+    config = load_valid_paper_config()
     try:
-        extracted_text = extract_text_from_file(filename, data)
-    except UnsupportedFileTypeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except TextExtractionError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    prepared_text = prepare_text_for_llm(extracted_text, get_max_input_chars())
-    if not prepared_text:
-        raise HTTPException(status_code=422, detail="Could not extract meaningful text from file.")
-
-    ensure_openai_api_key()
-    try:
-        raw_metadata = extract_metadata_with_openai(prepared_text)
-    except OpenAIConfigurationError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    except OpenAIResponseParseError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        ingested, total = ingest_valid_titles(request.titles, config)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail="OpenAI request failed.") from exc
+        logger.exception("Valid-title ingestion failed.")
+        raise HTTPException(status_code=500, detail="Valid-title ingestion failed.") from exc
 
-    public_metadata: dict[str, Any] = build_public_metadata(raw_metadata, prepared_text)
+    if ingested == 0:
+        raise HTTPException(status_code=422, detail="No valid titles found.")
+    return {"ingested_items": ingested, "total_items": total}
+
+@app.post(
+    "/valid-papers/ingest/keywords",
+    response_model=ValidIngestResponse,
+    tags=["Valid papers"],
+    summary="Nạp danh sách các cụm từ khóa hợp lệ vào kho vector",
+)
+async def ingest_valid_keywords_endpoint(request: ValidKeywordIngestRequest) -> dict[str, int]:
+    config = load_valid_paper_config()
+    keywords_list = [cluster.keywords for cluster in request.clusters]
     try:
-        public_metadata["matching"] = build_matching_response(
-            public_metadata["title"],
-            public_metadata["keywords"],
-            explain,
+        ingested, total = ingest_valid_keywords(keywords_list, config)
+    except Exception as exc:
+        logger.exception("Valid-keyword ingestion failed.")
+        raise HTTPException(status_code=500, detail="Valid-keyword ingestion failed.") from exc
+
+    if ingested == 0:
+        raise HTTPException(status_code=422, detail="No valid keywords found.")
+    return {"ingested_items": ingested, "total_items": total}
+
+
+@app.post(
+    "/valid-papers/match",
+    response_model=ValidPaperMatchResponse,
+    response_model_exclude_unset=True,
+    tags=["Valid papers"],
+    summary="So title + keywords bản thảo với kho bài hợp lệ (0.7 semantic + 0.3 BM25, top-5)",
+)
+async def match_valid_paper_endpoint(request: ValidPaperMatchRequest) -> dict[str, Any]:
+    title = request.title.strip() if request.title else None
+    keywords = [keyword.strip() for keyword in request.keywords if keyword and keyword.strip()]
+    if not title and not keywords:
+        raise HTTPException(status_code=400, detail="Provide a title and/or at least one keyword.")
+
+    config = load_valid_paper_config()
+    matcher = get_valid_paper_matcher(config)
+    if matcher is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Valid-paper store is empty; ingest papers via POST /valid-papers/ingest.",
         )
-    except Exception:
-        logger.exception("Matching failed; returning metadata without matching result.")
-        public_metadata["matching"] = None
-    return public_metadata
+
+    try:
+        result = matcher.match(title, keywords, explain=request.explain)
+    except Exception as exc:
+        logger.exception("Valid-paper match failed.")
+        raise HTTPException(status_code=500, detail="Valid-paper match failed.") from exc
+
+    return {
+        "overall_score": result.overall_score,
+        "title": _serialize_side(result.title, request.explain),
+        "keywords": _serialize_side(result.keywords, request.explain),
+    }
 
 
 def _is_supported_document(filename: str) -> bool:
@@ -166,9 +193,12 @@ def _is_supported_document(filename: str) -> bool:
     return suffix in set(settings.supported_extensions)
 
 
-@app.post("/check-structure")
+@app.post(
+    "/check-structure",
+    tags=["Structure"],
+    summary="Phân loại cấu trúc bản thảo (DOCX/PDF)",
+)
 async def check_structure_endpoint(file: UploadFile = File(...)) -> dict[str, Any]:
-    """Run the LLM structure classifier on an uploaded DOCX/PDF and return its raw JSON."""
     filename = file.filename or ""
     data = await file.read()
     if not data:
