@@ -77,9 +77,7 @@ class ValidPaperStore:
         if not ids:
             return
         self._check_model(model_name)
-        # type: ignore is needed because chromadb expects list[PyEmbedding] but list is invariant
-        self._titles.upsert(ids=ids, embeddings=embeddings, documents=texts) # type: ignore
-
+        self._titles.upsert(ids=ids, embeddings=embeddings, documents=texts)
         self._model_marker.write_text(model_name, encoding="utf-8")
 
     def add_keywords(
@@ -93,7 +91,7 @@ class ValidPaperStore:
         if not ids:
             return
         self._check_model(model_name)
-        self._keywords.upsert(ids=ids, embeddings=embeddings, documents=texts) # type: ignore
+        self._keywords.upsert(ids=ids, embeddings=embeddings, documents=texts)
         self._model_marker.write_text(model_name, encoding="utf-8")
 
     def count_titles(self) -> int:

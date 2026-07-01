@@ -5,10 +5,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import httpx
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
-from typing import Any, Tuple
+from typing import Tuple
 
 from config import Settings, settings
 from documents import DocumentPreview, DocumentView, build_document_preview, build_document_view
@@ -77,7 +76,7 @@ def prepare_document(
 
 
 def _error_report(error: str, *, deferred_tmp_path: str | None = None) -> StructureReport:
-    debug_info: dict[str, Any] = {"notes": [error]}
+    debug_info = {"notes": [error]}
     if deferred_tmp_path:
         debug_info["deferred_tmp_path"] = deferred_tmp_path
     return StructureReport(
@@ -91,82 +90,70 @@ def _error_report(error: str, *, deferred_tmp_path: str | None = None) -> Struct
     )
 
 
+def _run_structure_check(
+    tmp_path: str,
+    *,
+    paragraphs,
+    source_type: str,
+    app_settings: Settings,
+    timeout_seconds: int | None,
+) -> StructureReport:
+    """Run the (timed) structure check on an existing temp file and clean it up."""
+    timeout = timeout_seconds or app_settings.structure_timeout_seconds
+    keep_tmp_for_timeout = False
+    executor: ThreadPoolExecutor | None = None
+    try:
+        executor = ThreadPoolExecutor(max_workers=app_settings.max_workers)
+        future = executor.submit(
+            check_structure_document,
+            tmp_path,
+            openai_model=app_settings.default_llm_model,
+            min_confidence=app_settings.default_min_confidence,
+            parsed_paras=paragraphs,
+            source_type=source_type,
+        )
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            keep_tmp_for_timeout = True
+            future.cancel()
+            error = f"Quá thời gian xử lý (>{timeout}s)"
+            return _error_report(error, deferred_tmp_path=tmp_path)
+    except Exception as exc:
+        logger.error("Structure service failed: %s", exc, exc_info=True)
+        return _error_report(get_user_friendly_error(exc))
+    finally:
+        if tmp_path and not keep_tmp_for_timeout:
+            try:
+                os.remove(tmp_path)
+            except Exception as exc:
+                logger.warning("Could not remove temp file %s: %s", tmp_path, exc)
+
+        if executor is not None:
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+
+
 def check_structure(
     prepared_document: PreparedDocument,
     app_settings: Settings = settings,
     *,
     timeout_seconds: int | None = None,
 ) -> StructureReport:
-    """Run a structure check by calling the backend API."""
-    timeout = timeout_seconds or app_settings.structure_timeout_seconds
-    api_url = f"{app_settings.api_base_url.rstrip('/')}/check-structure"
-    
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            files = {
-                "file": (prepared_document.file_name, prepared_document.file_content)
-            }
-            response = client.post(api_url, files=files)
-            response.raise_for_status()
-            api_result = response.json()
-    except httpx.TimeoutException:
-        error = f"Quá thời gian xử lý (>{timeout}s)"
-        return _error_report(error)
-    except Exception as exc:
-        logger.error("API structure check failed: %s", exc, exc_info=True)
-        return _error_report(get_user_friendly_error(exc))
-
-    # Parse response into StructureReport
-    from structure.checker import _build_report, _init_hits
-    from structure.template import TARGETS, REQUIRED, REQUIRED_IDS
-    from structure.models import SectionHit
-    
-    sections = api_result.get("sections") or {}
-    hits = _init_hits()
-    min_confidence = app_settings.default_min_confidence
-
-    for key, _label in TARGETS:
-        item = sections.get(key) or {}
-        present = bool(item.get("present", False))
-        try:
-            confidence = float(item.get("confidence", 0.0))
-        except Exception:
-            confidence = 0.0
-
-        evidence = str(item.get("evidence") or "")
-        reason = str(item.get("reason") or "")
-
-        if present and confidence >= min_confidence:
-            hits[key] = SectionHit(
-                status="ok",
-                evidence=evidence,
-                llm_confidence=confidence,
-                notes=reason,
-            )
-        else:
-            hits[key] = SectionHit(
-                status="missing",
-                evidence=evidence if present else "",
-                llm_confidence=confidence,
-                notes=reason,
-            )
-
-    required_ids = [key for key, required in REQUIRED.items() if required]
-    ok = all(hits.get(key, SectionHit(status="missing")).status == "ok" for key in required_ids)
-
-    notes = [
-        f"API check successful",
-        f"file={prepared_document.file_name}"
-    ]
-
-    report = _build_report(file=prepared_document.file_name, ok=ok, sections=hits, notes=notes)
-    
-    # Check for domain_match in the API response
-    domain_match = api_result.get("domain_match")
-    if domain_match:
-        report.domain_match_suitable = bool(domain_match.get("suitable", False))
-        
-    return report
+    """Run a structure check for a prepared document."""
+    tmp_path = write_temp_document(
+        prepared_document.file_content,
+        prepared_document.file_name,
+    )
+    return _run_structure_check(
+        tmp_path,
+        paragraphs=prepared_document.document_view.paragraphs,
+        source_type=prepared_document.source_type,
+        app_settings=app_settings,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def detect_structure_bytes(
