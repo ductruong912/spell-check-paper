@@ -208,6 +208,7 @@ APP_CSS = """
 }
 .tnt-status--ok { background:var(--tnt-success-bg); color:var(--tnt-success); }
 .tnt-status--missing { background:var(--tnt-missing-bg); color:var(--tnt-missing); }
+.tnt-status--error { background:var(--tnt-missing-bg); color:var(--tnt-missing); }
 .tnt-sidebar-brand { margin-bottom:12px; }
 .tnt-sidebar-brand__title { color:var(--tnt-text); font-size:14px; font-weight:800; }
 .tnt-sidebar-brand__subtitle { margin-top:2px; color:var(--tnt-muted); font-size:11px; }

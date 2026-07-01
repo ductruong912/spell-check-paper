@@ -75,6 +75,7 @@ class Settings:
     temp_cleanup_ttl_seconds: int
     structure_template_path: Optional[str]
     log_level: str
+    api_base_url: str
 
 
 def load_settings(env_file: str | Path | None = None) -> Settings:
@@ -100,6 +101,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         temp_cleanup_ttl_seconds=env_int("TEMP_CLEANUP_TTL_SECONDS", 7200),
         structure_template_path=env_optional_str("STRUCTURE_TEMPLATE_PATH"),
         log_level=env_str("LOG_LEVEL", "INFO").upper(),
+        api_base_url=env_str("API_BASE_URL", "http://0.0.0.0:8501"),
     )
 
 

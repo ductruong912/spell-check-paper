@@ -25,6 +25,7 @@ class StructureReport:
     error: Optional[str] = None
     file: str = ""
     section_labels: Dict[str, str] = field(default_factory=dict)
+    domain_match_suitable: Optional[bool] = None
 
     @property
     def notes(self) -> List[str]:
@@ -47,6 +48,7 @@ class StructureReport:
             "debug_info": self.debug_info,
             "notes": self.notes,
             "error": self.error,
+            "domain_match_suitable": self.domain_match_suitable,
         }
 
     def to_ui_dict(self) -> Dict[str, Any]:

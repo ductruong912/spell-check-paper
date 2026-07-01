@@ -89,6 +89,24 @@ def structure_section_html(structure: Dict[str, Any]) -> str:
             "</div>"
         )
 
+    
+    domain_match_html = ""
+    domain_match = structure.get("domain_match_suitable")
+    if domain_match is not None:
+        status_text = "Phù hợp" if domain_match else "Không phù hợp"
+        status_class = "tnt-status--ok" if domain_match else "tnt-status--error"
+        domain_match_html = (
+            '<div class="tnt-results" style="margin-top: 24px;">'
+            '<div class="tnt-results__head">'
+            '<div class="tnt-results__title">Độ phù hợp</div>'
+            '</div>'
+            '<div class="tnt-result-row">'
+            '<span class="tnt-result-label">Độ phù hợp với lĩnh vực</span>'
+            f'<span class="tnt-status {status_class}">{status_text}</span>'
+            '</div>'
+            '</div>'
+        )
+
     return (
         '<div class="tnt-results">'
         '<div class="tnt-results__head">'
@@ -99,6 +117,7 @@ def structure_section_html(structure: Dict[str, Any]) -> str:
         "</div></div>"
         f"{''.join(rows)}"
         "</div>"
+        f"{domain_match_html}"
     )
 
 
