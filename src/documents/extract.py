@@ -1,9 +1,4 @@
-"""Plain-text extraction helpers shared across the project.
-
-The structure app parses documents into a rich :class:`DocumentView`; the
-journal-matching code only needs the flat text. Both now go through the same
-parser so PDF/DOCX reading lives in one place.
-"""
+"""Plain-text extraction helpers shared across the project."""
 
 from __future__ import annotations
 

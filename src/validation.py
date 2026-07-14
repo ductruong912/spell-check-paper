@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Optional, Tuple
 
-from config import OPENAI_API_KEY, settings
+from config import OPENAI_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +84,6 @@ def create_openai_client():
 
     is_valid, api_key, error_msg = validate_openai_api_key()
     if not is_valid:
+        error_msg = error_msg or "Lỗi xác thực không xác định"
         raise APIValidationError(error_msg, f"OpenAI API validation failed: {error_msg}")
     return OpenAI(api_key=api_key)
-
-
-def resolve_model(model: Optional[str] = None) -> str:
-    """Return the explicit model if given, otherwise the configured default."""
-    if model and model.strip():
-        return model.strip()
-    return settings.default_llm_model

@@ -21,6 +21,15 @@ def env_str(name: str, default: str = "") -> str:
     return value.strip()
 
 
+def env_str_raw(name: str, default: str = "") -> str:
+    """Đọc biến môi trường, chỉ strip newline (\\r\\n) — giữ trailing space.
+    Dùng cho prefix có trailing space như 'query: ' của e5 model."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.rstrip("\r\n")
+
+
 def env_optional_str(name: str) -> Optional[str]:
     value = os.getenv(name)
     if value is None or value.strip() == "":
@@ -46,6 +55,13 @@ def env_float(name: str, default: float) -> float:
         return float(value)
     except ValueError:
         return default
+
+
+def env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return value.strip().lower() in ("true", "1", "t", "y", "yes")
 
 
 def env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -77,6 +93,52 @@ class Settings:
     log_level: str
 
 
+class ValidPaperConfigurationError(ValueError):
+    pass
+
+
+class ReviewerConfigurationError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class ValidPaperConfig:
+    """Configuration for matching manuscript title/keywords against accepted papers."""
+
+    vector_store_path: str
+    title_collection: str
+    keyword_collection: str
+    title_semantic_weight: float
+    title_lexical_weight: float
+    keyword_semantic_weight: float
+    keyword_lexical_weight: float
+    title_score_weight: float
+    keyword_score_weight: float
+    top_k: int
+    eval_top_n: int
+    retrieval_score_weight: float
+    reranker_score_weight: float
+    suitable_threshold: float
+    model_name: str
+    reranker_model_name: str
+
+
+@dataclass(frozen=True)
+class ReviewerConfig:
+    """Configuration for reviewer recommendation from reviewer title history."""
+
+    store_path: str
+    collection: str
+    authored_weight: float
+    reviewed_weight: float
+    top_matches: int
+    model_name: str
+    reranker_model_name: str
+    rerank_candidates: int
+    retrieval_score_weight: float
+    reranker_score_weight: float
+
+
 def load_settings(env_file: str | Path | None = None) -> Settings:
     """Load application settings from environment and an optional dotenv file."""
     dotenv_path = Path(env_file) if env_file is not None else PROJECT_ROOT / ".env"
@@ -101,6 +163,114 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         structure_template_path=env_optional_str("STRUCTURE_TEMPLATE_PATH"),
         log_level=env_str("LOG_LEVEL", "INFO").upper(),
     )
+
+
+def _validate_valid_paper_config(config: ValidPaperConfig) -> ValidPaperConfig:
+    if config.title_semantic_weight < 0 or config.title_lexical_weight < 0:
+        raise ValidPaperConfigurationError("Valid-paper title weights must not be negative.")
+    if config.keyword_semantic_weight < 0 or config.keyword_lexical_weight < 0:
+        raise ValidPaperConfigurationError("Valid-paper keyword weights must not be negative.")
+    if config.title_score_weight < 0 or config.keyword_score_weight < 0:
+        raise ValidPaperConfigurationError("Valid-paper side score weights must not be negative.")
+    if config.title_semantic_weight + config.title_lexical_weight <= 0:
+        raise ValidPaperConfigurationError(
+            "At least one valid-paper title weight must be greater than zero."
+        )
+    if config.keyword_semantic_weight + config.keyword_lexical_weight <= 0:
+        raise ValidPaperConfigurationError(
+            "At least one valid-paper keyword weight must be greater than zero."
+        )
+    if config.title_score_weight + config.keyword_score_weight <= 0:
+        raise ValidPaperConfigurationError(
+            "At least one valid-paper side score weight must be greater than zero."
+        )
+    if config.retrieval_score_weight < 0 or config.reranker_score_weight < 0:
+        raise ValidPaperConfigurationError("Valid-paper retrieval/reranker weights must not be negative.")
+    if config.retrieval_score_weight + config.reranker_score_weight <= 0:
+        raise ValidPaperConfigurationError(
+            "At least one valid-paper retrieval/reranker weight must be greater than zero."
+        )
+    if config.top_k <= 0:
+        raise ValidPaperConfigurationError("VALID_TOP_K must be greater than zero.")
+    return config
+
+
+def _validate_reviewer_config(config: ReviewerConfig) -> ReviewerConfig:
+    if config.authored_weight < 0 or config.reviewed_weight < 0:
+        raise ReviewerConfigurationError("Reviewer score weights must not be negative.")
+    if config.authored_weight + config.reviewed_weight <= 0:
+        raise ReviewerConfigurationError(
+            "At least one reviewer score weight must be greater than zero."
+        )
+    if config.top_matches <= 0:
+        raise ReviewerConfigurationError("REVIEWER_TOP_MATCHES must be greater than zero.")
+    if config.rerank_candidates <= 0:
+        raise ReviewerConfigurationError(
+            "REVIEWER_RERANK_CANDIDATES must be greater than zero."
+        )
+    if config.retrieval_score_weight < 0 or config.reranker_score_weight < 0:
+        raise ReviewerConfigurationError("Reviewer retrieval/reranker weights must not be negative.")
+    if config.retrieval_score_weight + config.reranker_score_weight <= 0:
+        raise ReviewerConfigurationError(
+            "At least one reviewer retrieval/reranker weight must be greater than zero."
+        )
+    return config
+
+
+def load_valid_paper_config() -> ValidPaperConfig:
+    config = ValidPaperConfig(
+        vector_store_path=env_str("VALID_PAPER_STORE_PATH", "data_valid_paper_store"),
+        title_collection=env_str("VALID_TITLE_COLLECTION", "valid_titles"),
+        keyword_collection=env_str("VALID_KEYWORD_COLLECTION", "valid_keywords"),
+        title_semantic_weight=env_float("VALID_TITLE_SEMANTIC_WEIGHT", 0.7),
+        title_lexical_weight=env_float("VALID_TITLE_LEXICAL_WEIGHT", 0.3),
+        keyword_semantic_weight=env_float("VALID_KEYWORD_SEMANTIC_WEIGHT", 0.7),
+        keyword_lexical_weight=env_float("VALID_KEYWORD_LEXICAL_WEIGHT", 0.3),
+        title_score_weight=env_float("VALID_TITLE_SCORE_WEIGHT", 0.5),
+        keyword_score_weight=env_float("VALID_KEYWORD_SCORE_WEIGHT", 0.5),
+        top_k=env_int("VALID_TOP_K", 10),
+        eval_top_n=env_int("VALID_EVAL_TOP_N", 3),
+        retrieval_score_weight=env_float("VALID_RETRIEVAL_SCORE_WEIGHT", 0.4),
+        reranker_score_weight=env_float("VALID_RERANKER_SCORE_WEIGHT", 0.6),
+        suitable_threshold=env_float("VALID_SUITABLE_THRESHOLD", 0.50),
+        model_name=env_str(
+            "VALID_MODEL_NAME",
+            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        ),
+        reranker_model_name=env_str(
+            "VALID_RERANKER_MODEL_NAME",
+            "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        ),
+    )
+    return _validate_valid_paper_config(config)
+
+
+def load_reviewer_config() -> ReviewerConfig:
+    config = ReviewerConfig(
+        store_path=env_str("REVIEWER_STORE_PATH", "data_reviewer_store"),
+        collection=env_str("REVIEWER_COLLECTION", "reviewer_profiles"),
+        authored_weight=env_float("REVIEWER_AUTHORED_WEIGHT", 0.4),
+        reviewed_weight=env_float("REVIEWER_REVIEWED_WEIGHT", 0.6),
+        top_matches=env_int("REVIEWER_TOP_MATCHES", 3),
+        model_name=env_str(
+            "REVIEWER_MODEL_NAME",
+            env_str(
+                "VALID_MODEL_NAME",
+                "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+            ),
+        ),
+        reranker_model_name=env_str(
+            "REVIEWER_RERANKER_MODEL_NAME",
+            env_str(
+                "VALID_RERANKER_MODEL_NAME",
+                "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            ),
+        ),
+        rerank_candidates=env_int("REVIEWER_RERANK_CANDIDATES", 10),
+        retrieval_score_weight=env_float("REVIEWER_RETRIEVAL_SCORE_WEIGHT", 0.4),
+        reranker_score_weight=env_float("REVIEWER_RERANKER_SCORE_WEIGHT", 0.6),
+    )
+    return _validate_reviewer_config(config)
 
 
 settings = load_settings()

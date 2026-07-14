@@ -7,16 +7,15 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Any, Tuple
 
-from config import Settings, settings
+from config import Settings, load_valid_paper_config, settings
 from documents import DocumentPreview, DocumentView, build_document_preview, build_document_view
 from documents.temp_files import write_temp_document
 from structure.checker import check_structure_document
 from structure.classifier import llm_detect_structure
 from structure.models import StructureReport
 from validation import get_user_friendly_error
-from matching.config import load_valid_paper_config
 from matching.services.valid_paper_match import get_valid_paper_matcher
 
 logger = logging.getLogger(__name__)
@@ -76,7 +75,7 @@ def prepare_document(
 
 
 def _error_report(error: str, *, deferred_tmp_path: str | None = None) -> StructureReport:
-    debug_info = {"notes": [error]}
+    debug_info: dict[str, Any] = {"notes": [error]}
     if deferred_tmp_path:
         debug_info["deferred_tmp_path"] = deferred_tmp_path
     return StructureReport(
@@ -161,6 +160,7 @@ def detect_structure_bytes(
     content: bytes,
     app_settings: Settings = settings,
     *,
+    id: str,
     timeout_seconds: int | None = None,
 ) -> dict:
     """Return the raw LLM structure-classifier JSON for uploaded bytes."""
@@ -184,7 +184,7 @@ def detect_structure_bytes(
         
         try:
             config = load_valid_paper_config()
-            matcher = get_valid_paper_matcher(config)
+            matcher = get_valid_paper_matcher(id, config)
             if matcher is not None:
                 match_result = matcher.match(title, keywords, explain=False)
                 domain_match_dict = {

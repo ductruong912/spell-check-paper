@@ -7,7 +7,7 @@ import logging
 import re
 from typing import Any, Dict
 
-from config import DEFAULT_LLM_MODEL
+from config import DEFAULT_LLM_MODEL, OPENAI_MAX_TOKENS, OPENAI_TEMPERATURE
 from documents import normalize_whitespace
 
 from .prompt import build_structure_prompt
@@ -182,7 +182,7 @@ def _extracted_response_schema() -> Dict[str, Any]:
     }
 
 
-def _structure_response_format() -> Dict[str, Any]:
+def _structure_response_format() -> Any:
     section_props = {target_id: _section_response_schema() for target_id in TARGET_IDS}
     return {
         "type": "json_schema",
@@ -231,17 +231,18 @@ def llm_detect_structure(*, view_text: str, openai_model: str = DEFAULT_LLM_MODE
         resp = client.chat.completions.create(
             model=openai_model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=3000,
+            temperature=OPENAI_TEMPERATURE,
+            max_tokens=OPENAI_MAX_TOKENS,
             response_format=response_format,
         )
     except TypeError:
+        fallback_format: Any = {"type": "json_object"}
         resp = client.chat.completions.create(
             model=openai_model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=3000,
-            response_format={"type": "json_object"},
+            temperature=OPENAI_TEMPERATURE,
+            max_tokens=OPENAI_MAX_TOKENS,
+            response_format=fallback_format,
         )
 
     choice = resp.choices[0]

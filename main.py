@@ -8,21 +8,26 @@ from typing import Any
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from pydantic import BaseModel, field_validator
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from pydantic import BaseModel, Field, field_validator
 
 SRC_DIR = Path(__file__).resolve().parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from matching.config import load_valid_paper_config
 from matching.services.valid_paper_match import (
     get_valid_paper_matcher,
-    ingest_valid_titles,
-    ingest_valid_keywords,
+    replace_valid_paper_batch,
 )
+from reviewers.models import ReviewerProfile
+from reviewers.services.reviewer_suggestion import (
+    ingest_reviewers,
+    parse_reviewer_titles,
+    suggest_reviewers,
+)
+from domain_ids import normalize_domain_id
 
-from config import settings
+from config import load_reviewer_config, load_valid_paper_config, settings
 from services import detect_structure_bytes
 
 
@@ -38,6 +43,9 @@ TAGS_METADATA = [
     {
         "name": "Valid papers",
     },
+    {
+        "name": "Reviewers",
+    },
 ]
 
 app = FastAPI(title="Article Review API", openapi_tags=TAGS_METADATA)
@@ -51,28 +59,26 @@ def _split_keywords(value: Any) -> Any:
     return value
 
 
-class ValidTitleIngestRequest(BaseModel):
-    titles: list[str]
-
-class KeywordCluster(BaseModel):
-    keywords: list[str] = []
+class ValidPaperIngestItem(BaseModel):
+    title: str | None = None
+    keywords: list[str] = Field(default_factory=list)
 
     @field_validator("keywords", mode="before")
     @classmethod
     def split_keyword_string(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return value
         return _split_keywords(value)
 
-class ValidKeywordIngestRequest(BaseModel):
-    clusters: list[KeywordCluster]
-
-class ValidIngestResponse(BaseModel):
-    ingested_items: int
+class ValidBatchIngestResponse(BaseModel):
+    ingested_titles: int
+    ingested_keywords: int
     total_items: int
 
 
 class ValidPaperMatchRequest(BaseModel):
     title: str | None = None
-    keywords: list[str] = []
+    keywords: list[str] = Field(default_factory=list)
     explain: bool = False
 
     @field_validator("keywords", mode="before")
@@ -99,6 +105,47 @@ class ValidPaperMatchResponse(BaseModel):
     keywords: ValidPaperSideResponse | None = None
 
 
+class ReviewerIngestItem(BaseModel):
+    user_id: int
+    user: str
+    article: list[str] = Field(default_factory=list)
+    article_review: list[str] = Field(default_factory=list)
+
+    @field_validator("article", "article_review", mode="before")
+    @classmethod
+    def split_title_string(cls, value: Any) -> list[str]:
+        return parse_reviewer_titles(value)
+
+
+class ReviewerIngestResponse(BaseModel):
+    ingested_users: int
+    total_users: int
+    total_titles: int
+
+
+class ReviewerSuggestRequest(BaseModel):
+    title: str
+    explain: bool = False
+
+
+class ReviewerSuggestionItem(BaseModel):
+    user_id: int
+    user: str
+    score: float
+    authored_score: float
+    reviewed_score: float
+    matched_articles: list[str] | None = None
+    matched_reviewed_articles: list[str] | None = None
+
+
+class ReviewerSuggestResponse(BaseModel):
+    suggestions: list[ReviewerSuggestionItem]
+
+
+def _normalize_domain_id(value: str) -> str:
+    return normalize_domain_id(value)
+
+
 def _serialize_side(side: Any, explain: bool) -> dict[str, Any] | None:
     if side is None:
         return None
@@ -117,41 +164,34 @@ def _serialize_side(side: Any, explain: bool) -> dict[str, Any] | None:
 
 
 @app.post(
-    "/valid-papers/ingest/titles",
-    response_model=ValidIngestResponse,
+    "/valid-papers/ingest/batch",
+    response_model=ValidBatchIngestResponse,
     tags=["Valid papers"],
-    summary="Nạp danh sách các tiêu đề hợp lệ vào kho vector",
+    summary="Thay thế toàn bộ kho bài báo (Title + Keywords) cho 1 lĩnh vực",
 )
-async def ingest_valid_titles_endpoint(request: ValidTitleIngestRequest) -> dict[str, int]:
+async def ingest_valid_batch_endpoint(
+    papers: list[ValidPaperIngestItem],
+    id: str = Query(...),
+) -> dict[str, int]:
+    id = _normalize_domain_id(id)
     config = load_valid_paper_config()
     try:
-        ingested, total = ingest_valid_titles(request.titles, config)
+        t_ingested, k_ingested = replace_valid_paper_batch(
+            id,
+            [(paper.title, paper.keywords) for paper in papers],
+            config,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
-        logger.exception("Valid-title ingestion failed.")
-        raise HTTPException(status_code=500, detail="Valid-title ingestion failed.") from exc
+        logger.exception("Valid-batch ingestion failed.")
+        raise HTTPException(status_code=500, detail="Valid-batch ingestion failed.") from exc
 
-    if ingested == 0:
-        raise HTTPException(status_code=422, detail="No valid titles found.")
-    return {"ingested_items": ingested, "total_items": total}
-
-@app.post(
-    "/valid-papers/ingest/keywords",
-    response_model=ValidIngestResponse,
-    tags=["Valid papers"],
-    summary="Nạp danh sách các cụm từ khóa hợp lệ vào kho vector",
-)
-async def ingest_valid_keywords_endpoint(request: ValidKeywordIngestRequest) -> dict[str, int]:
-    config = load_valid_paper_config()
-    keywords_list = [cluster.keywords for cluster in request.clusters]
-    try:
-        ingested, total = ingest_valid_keywords(keywords_list, config)
-    except Exception as exc:
-        logger.exception("Valid-keyword ingestion failed.")
-        raise HTTPException(status_code=500, detail="Valid-keyword ingestion failed.") from exc
-
-    if ingested == 0:
-        raise HTTPException(status_code=422, detail="No valid keywords found.")
-    return {"ingested_items": ingested, "total_items": total}
+    return {
+        "ingested_titles": t_ingested,
+        "ingested_keywords": k_ingested,
+        "total_items": len(papers),
+    }
 
 
 @app.post(
@@ -159,20 +199,27 @@ async def ingest_valid_keywords_endpoint(request: ValidKeywordIngestRequest) -> 
     response_model=ValidPaperMatchResponse,
     response_model_exclude_unset=True,
     tags=["Valid papers"],
-    summary="So title + keywords bản thảo với kho bài hợp lệ (0.7 semantic + 0.3 BM25, top-5)",
+    summary="So title + keywords bản thảo với kho bài hợp lệ",
 )
-async def match_valid_paper_endpoint(request: ValidPaperMatchRequest) -> dict[str, Any]:
+async def match_valid_paper_endpoint(
+    request: ValidPaperMatchRequest,
+    id: str = Query(...),
+) -> dict[str, Any]:
+    id = _normalize_domain_id(id)
     title = request.title.strip() if request.title else None
     keywords = [keyword.strip() for keyword in request.keywords if keyword and keyword.strip()]
     if not title and not keywords:
         raise HTTPException(status_code=400, detail="Provide a title and/or at least one keyword.")
 
     config = load_valid_paper_config()
-    matcher = get_valid_paper_matcher(config)
+    matcher = get_valid_paper_matcher(id, config)
     if matcher is None:
         raise HTTPException(
             status_code=503,
-            detail="Valid-paper store is empty; ingest papers via POST /valid-papers/ingest.",
+            detail=(
+                "Valid-paper store is empty; ingest papers via "
+                "POST /valid-papers/ingest/batch."
+            ),
         )
 
     try:
@@ -188,6 +235,91 @@ async def match_valid_paper_endpoint(request: ValidPaperMatchRequest) -> dict[st
     }
 
 
+@app.post(
+    "/reviewers/ingest",
+    response_model=ReviewerIngestResponse,
+    tags=["Reviewers"],
+    summary="Nap kho chuyen gia phan bien theo title bai bao",
+)
+async def ingest_reviewers_endpoint(
+    reviewers: list[ReviewerIngestItem],
+    id: str = Query(...),
+) -> dict[str, int]:
+    id = _normalize_domain_id(id)
+    profiles = [
+        ReviewerProfile(
+            user_id=item.user_id,
+            user=item.user.strip(),
+            articles=item.article,
+            reviewed_articles=item.article_review,
+        )
+        for item in reviewers
+        if item.user.strip()
+    ]
+    if not profiles:
+        raise HTTPException(status_code=422, detail="No valid reviewer profiles found.")
+
+    config = load_reviewer_config()
+    try:
+        ingested_users, total_titles = ingest_reviewers(id, profiles, config)
+    except Exception as exc:
+        logger.exception("Reviewer ingestion failed.")
+        raise HTTPException(status_code=500, detail="Reviewer ingestion failed.") from exc
+
+    if total_titles == 0:
+        raise HTTPException(status_code=422, detail="No valid reviewer titles found.")
+    return {
+        "ingested_users": ingested_users,
+        "total_users": len(reviewers),
+        "total_titles": total_titles,
+    }
+
+
+@app.post(
+    "/reviewers/suggest",
+    response_model=ReviewerSuggestResponse,
+    response_model_exclude_none=True,
+    tags=["Reviewers"],
+    summary="Goi y chuyen gia phan bien theo title bai bao",
+)
+async def suggest_reviewers_endpoint(
+    request: ReviewerSuggestRequest,
+    id: str = Query(...),
+) -> dict[str, Any]:
+    id = _normalize_domain_id(id)
+    if not request.title.strip():
+        raise HTTPException(status_code=400, detail="Provide a manuscript title.")
+
+    config = load_reviewer_config()
+    try:
+        suggestions = suggest_reviewers(
+            id,
+            request.title,
+            config,
+            explain=request.explain,
+        )
+    except Exception as exc:
+        logger.exception("Reviewer suggestion failed.")
+        raise HTTPException(status_code=500, detail="Reviewer suggestion failed.") from exc
+
+    return {
+        "suggestions": [
+            {
+                "user_id": suggestion.user_id,
+                "user": suggestion.user,
+                "score": suggestion.score,
+                "authored_score": suggestion.authored_score,
+                "reviewed_score": suggestion.reviewed_score,
+                "matched_articles": suggestion.matched_articles if request.explain else None,
+                "matched_reviewed_articles": (
+                    suggestion.matched_reviewed_articles if request.explain else None
+                ),
+            }
+            for suggestion in suggestions
+        ]
+    }
+
+
 def _is_supported_document(filename: str) -> bool:
     suffix = Path(filename or "").suffix.lower().lstrip(".")
     return suffix in set(settings.supported_extensions)
@@ -198,7 +330,11 @@ def _is_supported_document(filename: str) -> bool:
     tags=["Structure"],
     summary="Phân loại cấu trúc bản thảo (DOCX/PDF)",
 )
-async def check_structure_endpoint(file: UploadFile = File(...)) -> dict[str, Any]:
+async def check_structure_endpoint(
+    id: str = Query(...),
+    file: UploadFile = File(...)
+) -> dict[str, Any]:
+    id = _normalize_domain_id(id)
     filename = file.filename or ""
     data = await file.read()
     if not data:
@@ -211,7 +347,7 @@ async def check_structure_endpoint(file: UploadFile = File(...)) -> dict[str, An
         )
 
     try:
-        return detect_structure_bytes(filename, data)
+        return detect_structure_bytes(filename, data, id=id)
     except FuturesTimeoutError as exc:
         raise HTTPException(
             status_code=504,

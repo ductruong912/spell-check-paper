@@ -1,67 +1,107 @@
 """So title + keywords bản thảo với kho bài báo HỢP LỆ.
 
 Luồng (mỗi mặt title/keywords độc lập):
-1. Embed truy vấn thành 1 vector (title 1 vector, list keywords gộp thành 1 vector).
-2. Với từng bản ghi trong kho: semantic = cosine(vector truy vấn, vector bản ghi);
-   lexical = BM25(truy vấn, text bản ghi) đã normalize 0..1 theo điểm cao nhất.
-3. Điểm tổng hợp mỗi bản ghi = 0.7*semantic + 0.3*lexical (theo config).
-4. Lấy top_k bản ghi điểm cao nhất rồi tính trung bình -> điểm của mặt đó.
+1. Embed truy vấn thành 1 vector dense và 1 vector sparse.
+2. Với từng bản ghi trong kho: Qdrant tìm top N theo dense và top N theo sparse.
+3. Tính điểm trên các ứng viên trả về: semantic = cosine(vector truy vấn, vector bản ghi);
+   lexical = dot_product(sparse_query, sparse_doc) đã normalize 0..1 theo điểm cao nhất.
+4. Điểm retrieval mỗi bản ghi = semantic/lexical theo config.
+5. Nếu bật reranker, trộn điểm retrieval và reranker theo config.
+6. Lấy eval_top_n bản ghi điểm cao nhất rồi tính trung bình -> điểm của mặt đó.
 overall_score = trung bình điểm title + điểm keywords (mặt nào có dữ liệu).
 """
 
+import shutil
+import uuid
 from functools import lru_cache
+from pathlib import Path
 
-from .bm25 import BM25, bm25_tokens
-from .embeddings import EmbeddingProvider, SbertEmbeddingProvider, cosine_similarity
-from ..config import ValidPaperConfig
+from config import ValidPaperConfig
+from domain_ids import get_domain_store_path, swap_store_directories
+from .embeddings import (
+    CrossEncoderProvider,
+    EmbeddingProvider,
+    SbertEmbeddingProvider,
+    SparseEmbeddingProvider,
+    cosine_similarity,
+    get_cross_encoder_provider,
+)
 from ..models.matching import ValidPaperMatch, ValidPaperResult, ValidPaperSideResult
+from ..repositories.valid_paper_store import ValidPaperStore
+from .preprocessing import normalize_keywords_text, normalize_keyword_tokens, normalize_title
+
+
+def fuse_retrieval_and_reranker(
+    retrieval_score: float,
+    reranker_score: float,
+    retrieval_weight: float,
+    reranker_weight: float,
+) -> float:
+    """Combine normalized retrieval and reranker scores using configured weights."""
+    total_weight = retrieval_weight + reranker_weight
+    if total_weight <= 0:
+        return 0.0
+    return (
+        retrieval_score * retrieval_weight + reranker_score * reranker_weight
+    ) / total_weight
 
 
 def join_keywords(keywords: list[str]) -> str:
     """Gộp list keywords thành một chuỗi (1 vector) để embed và chạy BM25."""
-    return ", ".join(keyword.strip() for keyword in keywords if keyword and keyword.strip())
+    return normalize_keywords_text(keywords)
 
 
 class ValidPaperMatcher:
     def __init__(
         self,
-        title_texts: list[str],
-        title_embeddings: list[list[float]],
-        keyword_texts: list[str],
-        keyword_embeddings: list[list[float]],
+        store: ValidPaperStore,
         embedding_provider: EmbeddingProvider,
+        sparse_provider: SparseEmbeddingProvider,
+        reranker_provider: CrossEncoderProvider | None,
         config: ValidPaperConfig,
     ):
         self.config = config
+        self.store = store
         self.embedding_provider = embedding_provider
-        self.title_texts = title_texts
-        self.title_embeddings = title_embeddings
-        self.keyword_texts = keyword_texts
-        self.keyword_embeddings = keyword_embeddings
-        # BM25 dựng sẵn theo corpus của kho; truy vấn chỉ chấm điểm, không dựng lại.
-        self._title_bm25 = BM25([bm25_tokens(text) for text in title_texts]) if title_texts else None
-        self._keyword_bm25 = BM25([bm25_tokens(text) for text in keyword_texts]) if keyword_texts else None
+        self.sparse_provider = sparse_provider
+        self.reranker_provider = reranker_provider
 
     def match(
         self, title: str | None, keywords: list[str], *, explain: bool
     ) -> ValidPaperResult:
+        title = normalize_title(title) or None
+        keywords = normalize_keyword_tokens(keywords)
+
         title_result = None
-        if title and title.strip() and self.title_texts:
+        if title and title.strip():
             title_result = self._side_score(
-                title.strip(), self.title_texts, self.title_embeddings, self._title_bm25, explain
+                title,
+                self.store.title_collection,
+                self.config.title_semantic_weight, self.config.title_lexical_weight,
+                explain
             )
 
         keyword_result = None
         keywords_text = join_keywords(keywords)
-        if keywords_text and self.keyword_texts:
+        if keywords_text:
             keyword_result = self._side_score(
-                keywords_text, self.keyword_texts, self.keyword_embeddings, self._keyword_bm25, explain
+                keywords_text, self.store.keyword_collection,
+                self.config.keyword_semantic_weight, self.config.keyword_lexical_weight,
+                explain
             )
 
-        side_scores = [
-            result.score for result in (title_result, keyword_result) if result is not None
-        ]
-        overall = sum(side_scores) / len(side_scores) if side_scores else None
+        total_weight = 0.0
+        weighted_sum = 0.0
+
+        if title_result is not None:
+            weighted_sum += title_result.score * self.config.title_score_weight
+            total_weight += self.config.title_score_weight
+            
+        if keyword_result is not None:
+            weighted_sum += keyword_result.score * self.config.keyword_score_weight
+            total_weight += self.config.keyword_score_weight
+
+        overall = weighted_sum / total_weight if total_weight > 0 else None
         suitable = overall >= self.config.suitable_threshold if overall is not None else None
         return ValidPaperResult(
             overall_score=overall, suitable=suitable, title=title_result, keywords=keyword_result
@@ -70,76 +110,144 @@ class ValidPaperMatcher:
     def _side_score(
         self,
         query_text: str,
-        doc_texts: list[str],
-        doc_embeddings: list[list[float]],
-        bm25: BM25 | None,
+        collection_name: str,
+        semantic_weight: float,
+        lexical_weight: float,
         explain: bool,
     ) -> ValidPaperSideResult:
-        query_embedding = self.embedding_provider.embed_texts([query_text])[0]
-        semantic = [
-            max(0.0, min(1.0, cosine_similarity(query_embedding, embedding)))
-            for embedding in doc_embeddings
-        ]
+        if not self.store._client.collection_exists(collection_name) or self.store._client.count(collection_name).count == 0:
+            return ValidPaperSideResult(score=0.0, matches=[])
 
-        raw_bm25 = bm25.scores(bm25_tokens(query_text)) if bm25 else [0.0] * len(doc_texts)
-        max_bm25 = max(raw_bm25) if raw_bm25 else 0.0
-        # Normalize BM25 về 0..1 theo điểm cao nhất của truy vấn để blend 70/30 có nghĩa.
-        lexical = [(score / max_bm25 if max_bm25 > 0 else 0.0) for score in raw_bm25]
+        query_embedding = self.embedding_provider.embed_query([query_text])[0]
+        sparse_se = self.sparse_provider.embed_texts([query_text])[0]
+        
+        from qdrant_client.models import SparseVector
+        
+        indices = sparse_se.indices.tolist() if hasattr(sparse_se.indices, "tolist") else sparse_se.indices
+        values = sparse_se.values.tolist() if hasattr(sparse_se.values, "tolist") else sparse_se.values
+        sparse_vector = SparseVector(indices=indices, values=values)
+        
+        ideal_bm25 = sum(v * v for v in values)
 
-        combined = [
-            self.config.semantic_weight * semantic[index]
-            + self.config.lexical_weight * lexical[index]
-            for index in range(len(doc_texts))
-        ]
-
-        order = sorted(range(len(combined)), key=lambda index: combined[index], reverse=True)
-        top = order[: self.config.top_k]
-        matches = [
-            ValidPaperMatch(
-                text=doc_texts[index],
-                score=combined[index],
-                semantic=semantic[index],
-                lexical=lexical[index],
+        # Retrieve top candidates from both dense and sparse indexes
+        candidate_pool_size = self.config.top_k * 5
+        
+        dense_results = self.store._client.query_points(
+            collection_name=collection_name,
+            query=query_embedding,
+            using="dense",
+            limit=candidate_pool_size,
+            with_payload=True,
+            with_vectors=True,
+        ).points
+        
+        sparse_results = self.store._client.query_points(
+            collection_name=collection_name,
+            query=sparse_vector,
+            using="sparse",
+            limit=candidate_pool_size,
+            with_payload=True,
+            with_vectors=True,
+        ).points
+        
+        # Combine unique points
+        candidates = {}
+        for r in dense_results + sparse_results:
+            if r.id not in candidates:
+                candidates[r.id] = r
+                
+        # Calculate exact combined scores
+        matches_unsorted = []
+        for r in candidates.values():
+            vecs = r.vector
+            if not vecs: continue
+            
+            # Semantic Score
+            doc_dense = vecs.get("dense")
+            if doc_dense is not None:
+                semantic_score = max(0.0, min(1.0, cosine_similarity(query_embedding, doc_dense)))
+            else:
+                semantic_score = 0.0
+                
+            # Lexical Score (dot product)
+            doc_sparse = vecs.get("sparse")
+            lexical_score = 0.0
+            if doc_sparse is not None and ideal_bm25 > 0:
+                doc_indices = doc_sparse.indices
+                doc_values = doc_sparse.values
+                # compute dot product matching indices
+                dot = 0.0
+                query_dict = dict(zip(indices, values))
+                for idx, val in zip(doc_indices, doc_values):
+                    if idx in query_dict:
+                        dot += query_dict[idx] * val
+                lexical_score = min(1.0, dot / ideal_bm25)
+                
+            combined = semantic_weight * semantic_score + lexical_weight * lexical_score
+            text = r.payload.get("text", "")
+            
+            matches_unsorted.append(
+                ValidPaperMatch(
+                    text=text,
+                    score=combined,
+                    semantic=semantic_score,
+                    lexical=lexical_score,
+                )
             )
-            for index in top
-        ]
-        average = sum(match.score for match in matches) / len(matches) if matches else 0.0
+
+        matches_unsorted.sort(key=lambda m: m.score, reverse=True)
+        matches = matches_unsorted[: self.config.top_k]
+
+        if self.reranker_provider and matches:
+            pairs = [(query_text, match.text) for match in matches]
+            rerank_scores = self.reranker_provider.predict(pairs)
+            new_matches = []
+            for i, match in enumerate(matches):
+                final_score = fuse_retrieval_and_reranker(
+                    match.score,
+                    rerank_scores[i],
+                    self.config.retrieval_score_weight,
+                    self.config.reranker_score_weight,
+                )
+                new_matches.append(
+                    ValidPaperMatch(
+                        text=match.text,
+                        score=final_score,
+                        semantic=match.semantic,
+                        lexical=match.lexical,
+                    )
+                )
+            matches = new_matches
+            matches.sort(key=lambda x: x.score, reverse=True)
+
+        if not matches:
+            average = 0.0
+        else:
+            top_n = matches[:self.config.eval_top_n]
+            average = sum(m.score for m in top_n) / len(top_n)
         return ValidPaperSideResult(score=average, matches=matches if explain else [])
 
 
 @lru_cache(maxsize=4)
-def _build_cached_matcher(config: ValidPaperConfig) -> ValidPaperMatcher | None:
-    from ..repositories.valid_paper_store import ValidPaperStore
-
+def _build_cached_matcher(domain_id: str, config: ValidPaperConfig) -> ValidPaperMatcher | None:
+    store_path = get_domain_store_path(config.vector_store_path, domain_id)
     store = ValidPaperStore(
-        config.vector_store_path, config.title_collection, config.keyword_collection
+        str(store_path), config.title_collection, config.keyword_collection
     )
-    title_texts, title_embeddings = store.load_titles()
-    keyword_texts, keyword_embeddings = store.load_keywords()
-    if not title_texts and not keyword_texts:
-        return None
 
-    stored_model = store.stored_model()
-    if stored_model and stored_model != config.model_name:
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "Valid-paper store dựng bằng model '%s' nhưng config dùng '%s'; "
-            "nạp lại kho để embed bằng model mới.",
-            stored_model,
-            config.model_name,
-        )
-        return None
-
-    provider = SbertEmbeddingProvider(config.model_name, config.model_prefix)
+    provider = SbertEmbeddingProvider(config.model_name)
+    sparse_provider = SparseEmbeddingProvider()
+    
+    reranker = get_cross_encoder_provider(config.reranker_model_name)
+        
     return ValidPaperMatcher(
-        title_texts, title_embeddings, keyword_texts, keyword_embeddings, provider, config
+        store, provider, sparse_provider, reranker, config
     )
 
 
-def get_valid_paper_matcher(config: ValidPaperConfig) -> ValidPaperMatcher | None:
-    """Tạo matcher (nạp model + đọc kho một lần) và cache theo config."""
-    return _build_cached_matcher(config)
+def get_valid_paper_matcher(domain_id: str, config: ValidPaperConfig) -> ValidPaperMatcher | None:
+    """Tạo matcher (nạp model) và cache theo config."""
+    return _build_cached_matcher(domain_id, config)
 
 
 def reset_valid_paper_matcher() -> None:
@@ -147,72 +255,74 @@ def reset_valid_paper_matcher() -> None:
     _build_cached_matcher.cache_clear()
 
 
-def ingest_valid_titles(titles: list[str], config: ValidPaperConfig) -> tuple[int, int]:
-    from ..repositories.valid_paper_store import ValidPaperStore
+def replace_valid_paper_batch(
+    domain_id: str,
+    papers: list[tuple[str | None, list[str]]],
+    config: ValidPaperConfig,
+) -> tuple[int, int]:
+    """Build a complete valid-paper store and swap it in after success."""
+    target_path = get_domain_store_path(config.vector_store_path, domain_id)
+    staging_path = target_path.parent / f".{target_path.name}.staging-{uuid.uuid4().hex}"
+    staging_store = None
+    try:
+        title_texts: list[str] = []
+        title_ids: list[str] = []
+        seen_titles: set[str] = set()
+        keyword_texts: list[str] = []
+        keyword_ids: list[str] = []
+        seen_keywords: set[str] = set()
 
-    store = ValidPaperStore(
-        config.vector_store_path, config.title_collection, config.keyword_collection
-    )
+        for title, keywords in papers:
+            normalized_title = normalize_title(title) if title else ""
+            if normalized_title:
+                title_id = ValidPaperStore.title_id(normalized_title)
+                if title_id not in seen_titles:
+                    seen_titles.add(title_id)
+                    title_ids.append(title_id)
+                    title_texts.append(normalized_title)
 
-    ids: list[str] = []
-    title_texts: list[str] = []
-    seen: set[str] = set()
-    for title in titles:
-        title = title.strip()
-        if not title:
-            continue
-        paper_id = ValidPaperStore.title_id(title)
-        if paper_id in seen:
-            continue
-        seen.add(paper_id)
-        ids.append(paper_id)
-        title_texts.append(title)
+            normalized_keywords = normalize_keywords_text(keywords)
+            if normalized_keywords:
+                keyword_id = ValidPaperStore.keyword_id(normalized_keywords)
+                if keyword_id not in seen_keywords:
+                    seen_keywords.add(keyword_id)
+                    keyword_ids.append(keyword_id)
+                    keyword_texts.append(normalized_keywords)
 
-    if not ids:
-        return 0, store.count_titles()
+        if not title_texts and not keyword_texts:
+            raise ValueError("No valid titles or keywords found in the batch.")
 
-    provider = SbertEmbeddingProvider(config.model_name, config.model_prefix)
-    title_embeddings = provider.embed_texts(title_texts)
-    store.add_titles(
-        ids=ids,
-        texts=title_texts,
-        embeddings=title_embeddings,
-        model_name=config.model_name,
-    )
-    reset_valid_paper_matcher()
-    return len(ids), store.count_titles()
+        provider = SbertEmbeddingProvider(config.model_name)
+        sparse_provider = SparseEmbeddingProvider()
+        staging_store = ValidPaperStore(
+            str(staging_path), config.title_collection, config.keyword_collection
+        )
 
-def ingest_valid_keywords(keywords_list: list[list[str]], config: ValidPaperConfig) -> tuple[int, int]:
-    from ..repositories.valid_paper_store import ValidPaperStore
+        if title_texts:
+            staging_store.add_titles(
+                ids=title_ids,
+                texts=title_texts,
+                embeddings=provider.embed_passages(title_texts),
+                sparse_embeddings=sparse_provider.embed_texts(title_texts),
+                model_name=config.model_name,
+            )
+        if keyword_texts:
+            staging_store.add_keywords(
+                ids=keyword_ids,
+                texts=keyword_texts,
+                embeddings=provider.embed_passages(keyword_texts),
+                sparse_embeddings=sparse_provider.embed_texts(keyword_texts),
+                model_name=config.model_name,
+            )
+        staging_store.close()
+        staging_store = None
 
-    store = ValidPaperStore(
-        config.vector_store_path, config.title_collection, config.keyword_collection
-    )
-
-    ids: list[str] = []
-    keyword_texts: list[str] = []
-    seen: set[str] = set()
-    for kw_list in keywords_list:
-        keywords_text = join_keywords(kw_list)
-        if not keywords_text:
-            continue
-        paper_id = ValidPaperStore.keyword_id(keywords_text)
-        if paper_id in seen:
-            continue
-        seen.add(paper_id)
-        ids.append(paper_id)
-        keyword_texts.append(keywords_text)
-
-    if not ids:
-        return 0, store.count_keywords()
-
-    provider = SbertEmbeddingProvider(config.model_name, config.model_prefix)
-    keyword_embeddings = provider.embed_texts(keyword_texts)
-    store.add_keywords(
-        ids=ids,
-        texts=keyword_texts,
-        embeddings=keyword_embeddings,
-        model_name=config.model_name,
-    )
-    reset_valid_paper_matcher()
-    return len(ids), store.count_keywords()
+        reset_valid_paper_matcher()
+        swap_store_directories(staging_path, target_path)
+        return len(title_texts), len(keyword_texts)
+    except Exception:
+        if staging_store is not None:
+            staging_store.close()
+        if staging_path.exists():
+            shutil.rmtree(staging_path)
+        raise

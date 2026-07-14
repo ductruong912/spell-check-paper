@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from xml.sax.saxutils import escape, quoteattr
 
 from docx import Document
+from docx.document import Document as DocxDocument
 from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
@@ -41,7 +42,7 @@ def normalize_whitespace(s: str) -> str:
     return s
 
 
-def _collect_header_footer_text(doc: Document) -> set[str]:
+def _collect_header_footer_text(doc: DocxDocument) -> set[str]:
     hf_texts: set[str] = set()
     try:
         for sec in doc.sections:
@@ -58,7 +59,7 @@ def _collect_header_footer_text(doc: Document) -> set[str]:
     return hf_texts
 
 
-def _collect_numbering_formats(doc: Document) -> Dict[Tuple[str, str], Tuple[str, str, int]]:
+def _collect_numbering_formats(doc: DocxDocument) -> Dict[Tuple[str, str], Tuple[str, str, int]]:
     """Map (numId, ilvl) -> (numFmt, lvlText, start)."""
     try:
         root = doc.part.numbering_part.element
@@ -133,12 +134,14 @@ def _heading_level_from_style(style_name: str) -> int:
 
 def _paragraph_style_name(p: Paragraph) -> str:
     try:
+        if p.style is None:
+            return ""
         return p.style.name or ""
     except Exception:
         return ""
 
 
-def _iter_body_paragraphs(doc: Document) -> Iterator[Tuple[Paragraph, str, str]]:
+def _iter_body_paragraphs(doc: DocxDocument) -> Iterator[Tuple[Paragraph, str, str]]:
     """Yield document paragraphs and table-cell paragraphs in body XML order."""
     body = doc.element.body
     paragraph_index = 0
@@ -241,7 +244,7 @@ def extract_pdf_paragraphs(path: str) -> List[DocPara]:
 
     flags = fitz.TEXTFLAGS_BLOCKS | fitz.TEXT_DEHYPHENATE
     with fitz.open(path) as pdf:
-        for page_index, page in enumerate(pdf, start=1):
+        for page_index, page in enumerate(pdf, start=1):  # type: ignore
             blocks = page.get_text("blocks", sort=False, flags=flags)
             page_height = float(page.rect.height)
             page_blocks.append((page_index, page_height, blocks))
