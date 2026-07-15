@@ -191,8 +191,6 @@ class ReviewerMatcher:
                 reviewed_scores[point.user_id].append(title_score)
 
         suggestions: list[ReviewerSuggestion] = []
-        total_weight = self.config.authored_weight + self.config.reviewed_weight
-        denominator = total_weight if total_weight > 0 else 1.0
         top_authored_by_user = _select_top_scores_by_user(
             query_text,
             authored_scores,
@@ -217,10 +215,7 @@ class ReviewerMatcher:
             top_reviewed = top_reviewed_by_user.get(user_id, [])
             authored_score = _average_score(top_authored)
             reviewed_score = _average_score(top_reviewed)
-            score = (
-                authored_score * self.config.authored_weight
-                + reviewed_score * self.config.reviewed_weight
-            ) / denominator
+            score = _select_reviewer_score(authored_score, reviewed_score)
 
             suggestion = ReviewerSuggestion(
                 user_id=user_id,
@@ -303,6 +298,11 @@ def _average_score(scores: list[_TitleScore]) -> float:
     if not scores:
         return 0.0
     return sum(item.score for item in scores) / len(scores)
+
+
+def _select_reviewer_score(authored_score: float, reviewed_score: float) -> float:
+    """Use the stronger of a reviewer's authored or reviewed-title matches."""
+    return max(authored_score, reviewed_score)
 
 
 @lru_cache(maxsize=4)

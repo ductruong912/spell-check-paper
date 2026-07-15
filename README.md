@@ -151,10 +151,10 @@ Hệ thống tính điểm toàn bộ chuyên gia đã nạp và trả về toà
 Điểm mặc định ưu tiên nhẹ kinh nghiệm phản biện:
 
 ```text
-score = authored_score * 0.4 + reviewed_score * 0.6
+score = max(authored_score, reviewed_score)
 ```
 
-Hai trọng số này có thể đổi bằng `REVIEWER_AUTHORED_WEIGHT` và `REVIEWER_REVIEWED_WEIGHT` trong `.env`.
+Reviewer được tính điểm theo nguồn có title phù hợp cao hơn: bài đã viết hoặc bài đã phản biện.
 Hệ thống luôn lấy candidate rộng hơn bằng `REVIEWER_RERANK_CANDIDATES`, chấm lại bằng reranker, rồi mới lấy `REVIEWER_TOP_MATCHES` title tốt nhất để tính điểm.
 Điểm mỗi title sau rerank được kết hợp theo công thức `retrieval_score * REVIEWER_RETRIEVAL_SCORE_WEIGHT + reranker_score * REVIEWER_RERANKER_SCORE_WEIGHT`.
 
@@ -188,7 +188,6 @@ Hệ thống luôn lấy candidate rộng hơn bằng `REVIEWER_RERANK_CANDIDATE
 - `VALID_RETRIEVAL_SCORE_WEIGHT`, `VALID_RERANKER_SCORE_WEIGHT`: trọng số fusion giữa điểm retrieval và reranker khi reranker được bật
 - `REVIEWER_STORE_PATH`: thư mục lưu Qdrant local store cho kho chuyên gia, mặc định `data_reviewer_store`
 - `REVIEWER_COLLECTION`: tên collection lưu title chuyên gia
-- `REVIEWER_AUTHORED_WEIGHT`, `REVIEWER_REVIEWED_WEIGHT`: trọng số title đã viết và title đã phản biện khi tính điểm
 - `REVIEWER_TOP_MATCHES`: số title gần nhất dùng để giải thích và lấy trung bình điểm mỗi nhóm
 - `REVIEWER_RERANKER_MODEL_NAME`: model cross-encoder dùng để rerank reviewer title candidates
 - `REVIEWER_RERANK_CANDIDATES`: số candidate mỗi nhóm được rerank trước khi lấy `REVIEWER_TOP_MATCHES`, mặc định `10`

@@ -187,6 +187,12 @@ async def ingest_valid_batch_endpoint(
         logger.exception("Valid-batch ingestion failed.")
         raise HTTPException(status_code=500, detail="Valid-batch ingestion failed.") from exc
 
+    logger.info(
+        "Valid papers ingested: id=%s titles=%s keywords=%s",
+        id,
+        t_ingested,
+        k_ingested,
+    )
     return {
         "ingested_titles": t_ingested,
         "ingested_keywords": k_ingested,
@@ -268,6 +274,20 @@ async def ingest_reviewers_endpoint(
 
     if total_titles == 0:
         raise HTTPException(status_code=422, detail="No valid reviewer titles found.")
+
+    article_embeddings = sum(
+        len(parse_reviewer_titles(profile.articles)) for profile in profiles
+    )
+    article_review_embeddings = sum(
+        len(parse_reviewer_titles(profile.reviewed_articles)) for profile in profiles
+    )
+    logger.info(
+        "Reviewers ingested: id=%s users=%s articles=%s article_reviews=%s",
+        id,
+        len(profiles),
+        article_embeddings,
+        article_review_embeddings,
+    )
     return {
         "ingested_users": ingested_users,
         "total_users": len(reviewers),

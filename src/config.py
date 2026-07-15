@@ -129,8 +129,6 @@ class ReviewerConfig:
 
     store_path: str
     collection: str
-    authored_weight: float
-    reviewed_weight: float
     top_matches: int
     model_name: str
     reranker_model_name: str
@@ -196,12 +194,6 @@ def _validate_valid_paper_config(config: ValidPaperConfig) -> ValidPaperConfig:
 
 
 def _validate_reviewer_config(config: ReviewerConfig) -> ReviewerConfig:
-    if config.authored_weight < 0 or config.reviewed_weight < 0:
-        raise ReviewerConfigurationError("Reviewer score weights must not be negative.")
-    if config.authored_weight + config.reviewed_weight <= 0:
-        raise ReviewerConfigurationError(
-            "At least one reviewer score weight must be greater than zero."
-        )
     if config.top_matches <= 0:
         raise ReviewerConfigurationError("REVIEWER_TOP_MATCHES must be greater than zero.")
     if config.rerank_candidates <= 0:
@@ -249,8 +241,6 @@ def load_reviewer_config() -> ReviewerConfig:
     config = ReviewerConfig(
         store_path=env_str("REVIEWER_STORE_PATH", "data_reviewer_store"),
         collection=env_str("REVIEWER_COLLECTION", "reviewer_profiles"),
-        authored_weight=env_float("REVIEWER_AUTHORED_WEIGHT", 0.4),
-        reviewed_weight=env_float("REVIEWER_REVIEWED_WEIGHT", 0.6),
         top_matches=env_int("REVIEWER_TOP_MATCHES", 3),
         model_name=env_str(
             "REVIEWER_MODEL_NAME",
