@@ -20,3 +20,4 @@ htmlcov/
 /data_reviewer_store
 .codegraph/
 docs/
+.worktrees/

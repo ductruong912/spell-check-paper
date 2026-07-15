@@ -28,16 +28,34 @@ class FakeEmbeddingProvider:
 class SbertEmbeddingProvider:
     """Wrapper quanh SentenceTransformer."""
 
-    def __init__(self, model_name: str):
+    def __init__(
+        self,
+        model_name: str,
+        batch_size: int = 32,
+        torch_num_threads: int = 0,
+    ):
         from sentence_transformers import SentenceTransformer
 
+        if batch_size <= 0:
+            raise ValueError("Embedding batch size must be greater than zero.")
+        if torch_num_threads < 0:
+            raise ValueError("Torch thread count must not be negative.")
+        if torch_num_threads:
+            import torch
+
+            torch.set_num_threads(torch_num_threads)
+
+        self.batch_size = batch_size
         self.model = SentenceTransformer(model_name)
 
     def _encode(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
         embeddings = self.model.encode(
-            texts, normalize_embeddings=True, show_progress_bar=False
+            texts,
+            batch_size=self.batch_size,
+            normalize_embeddings=True,
+            show_progress_bar=False,
         )
         em_tolist = getattr(embeddings, "tolist", None)
         if callable(em_tolist):
@@ -56,6 +74,16 @@ class SbertEmbeddingProvider:
     # Backward compat — dùng passage prefix
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         return self.embed_passages(texts)
+
+
+@lru_cache(maxsize=4)
+def get_embedding_provider(
+    model_name: str,
+    batch_size: int = 32,
+    torch_num_threads: int = 0,
+) -> SbertEmbeddingProvider:
+    """Return one shared embedding provider per model within this process."""
+    return SbertEmbeddingProvider(model_name, batch_size, torch_num_threads)
 
 
 class SparseEmbeddingProvider:

@@ -5,7 +5,6 @@ import shutil
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Any, Iterable
 
 from config import ReviewerConfig
@@ -13,9 +12,9 @@ from domain_ids import get_domain_store_path, normalize_domain_id, swap_store_di
 from documents import normalize_whitespace
 from matching.services.embeddings import (
     CrossEncoderProvider,
-    SbertEmbeddingProvider,
     SparseEmbeddingProvider,
     cosine_similarity,
+    get_embedding_provider,
     get_cross_encoder_provider,
 )
 from matching.services.preprocessing import normalize_title
@@ -64,20 +63,6 @@ class _TitleScore:
     title: str
     retrieval_score: float
     score: float
-
-
-def _fuse_retrieval_and_reranker(
-    retrieval_score: float,
-    reranker_score: float,
-    retrieval_weight: float,
-    reranker_weight: float,
-) -> float:
-    total_weight = retrieval_weight + reranker_weight
-    if total_weight <= 0:
-        return 0.0
-    return (
-        retrieval_score * retrieval_weight + reranker_score * reranker_weight
-    ) / total_weight
 
 
 def _sparse_items(sparse_vector: Any | None) -> tuple[list[int], list[float]]:
@@ -190,32 +175,26 @@ class ReviewerMatcher:
             elif point.source == _REVIEWED_SOURCE:
                 reviewed_scores[point.user_id].append(title_score)
 
-        suggestions: list[ReviewerSuggestion] = []
-        top_authored_by_user = _select_top_scores_by_user(
+        top_authored_by_user = _select_best_score_by_user(authored_scores)
+        top_reviewed_by_user = _select_best_score_by_user(reviewed_scores)
+        if self.reranker_provider is None:
+            raise RuntimeError("Reviewer reranker is unavailable.")
+        rerank_scores = _rerank_representative_titles_by_group(
             query_text,
-            authored_scores,
-            self.config.top_matches,
-            self.config.rerank_candidates,
+            user_info,
+            top_authored_by_user,
+            top_reviewed_by_user,
             self.reranker_provider,
-            self.config.retrieval_score_weight,
-            self.config.reranker_score_weight,
         )
-        top_reviewed_by_user = _select_top_scores_by_user(
-            query_text,
-            reviewed_scores,
-            self.config.top_matches,
-            self.config.rerank_candidates,
-            self.reranker_provider,
-            self.config.retrieval_score_weight,
-            self.config.reranker_score_weight,
-        )
+        ranked_suggestions: list[tuple[int, float, ReviewerSuggestion]] = []
 
-        for user_id, (user, _articles, _reviewed_articles) in user_info.items():
-            top_authored = top_authored_by_user.get(user_id, [])
-            top_reviewed = top_reviewed_by_user.get(user_id, [])
-            authored_score = _average_score(top_authored)
-            reviewed_score = _average_score(top_reviewed)
-            score = _select_reviewer_score(authored_score, reviewed_score)
+        for user_id, (user, articles, reviewed_articles) in user_info.items():
+            top_authored = top_authored_by_user.get(user_id)
+            top_reviewed = top_reviewed_by_user.get(user_id)
+            authored_score = rerank_scores.get((user_id, _AUTHORED_SOURCE), 0.0)
+            reviewed_score = rerank_scores.get((user_id, _REVIEWED_SOURCE), 0.0)
+            group = _reviewer_group(articles, reviewed_articles)
+            score = _calculate_reviewer_score(group, authored_score, reviewed_score)
 
             suggestion = ReviewerSuggestion(
                 user_id=user_id,
@@ -223,96 +202,101 @@ class ReviewerMatcher:
                 score=score,
                 authored_score=authored_score,
                 reviewed_score=reviewed_score,
-                matched_articles=[item.title for item in top_authored] if explain else [],
-                matched_reviewed_articles=[item.title for item in top_reviewed] if explain else [],
+                matched_articles=[top_authored.title] if explain and top_authored else [],
+                matched_reviewed_articles=[top_reviewed.title] if explain and top_reviewed else [],
             )
-            suggestions.append(suggestion)
+            ranked_suggestions.append((group, score, suggestion))
 
-        suggestions.sort(key=lambda item: (-item.score, item.user_id))
-        return suggestions
-
-
-def _top_scores(scores: list[_TitleScore], limit: int) -> list[_TitleScore]:
-    if limit <= 0:
-        return []
-    return sorted(scores, key=lambda item: item.score, reverse=True)[:limit]
+        ranked_suggestions.sort(key=_reviewer_sort_key)
+        return [suggestion for _, _, suggestion in ranked_suggestions]
 
 
-def _select_top_scores_by_user(
-    query_text: str,
+def _select_best_score_by_user(
     scores_by_user: dict[int, list[_TitleScore]],
-    top_matches: int,
-    rerank_candidates: int,
-    reranker_provider: CrossEncoderProvider | None,
-    retrieval_score_weight: float,
-    reranker_score_weight: float,
-) -> dict[int, list[_TitleScore]]:
-    if reranker_provider is None:
-        return {
-            user_id: _top_scores(scores, top_matches)
-            for user_id, scores in scores_by_user.items()
-        }
-
-    candidate_limit = max(top_matches, rerank_candidates)
-    candidates_by_user = {
-        user_id: _top_scores(scores, candidate_limit)
-        for user_id, scores in scores_by_user.items()
-    }
-    pairs: list[tuple[str, str]] = []
-    keys: list[tuple[int, int]] = []
-    for user_id, candidates in candidates_by_user.items():
-        for index, candidate in enumerate(candidates):
-            keys.append((user_id, index))
-            pairs.append((query_text, candidate.title))
-
-    if not pairs:
-        return {user_id: [] for user_id in scores_by_user}
-
-    rerank_scores = reranker_provider.predict(pairs)
-    if len(rerank_scores) != len(keys):
-        return {
-            user_id: _top_scores(candidates, top_matches)
-            for user_id, candidates in candidates_by_user.items()
-        }
-
-    reranked_by_user: dict[int, list[_TitleScore]] = defaultdict(list)
-    for (user_id, index), score in zip(keys, rerank_scores):
-        candidate = candidates_by_user[user_id][index]
-        fused_score = _fuse_retrieval_and_reranker(
-            candidate.retrieval_score,
-            float(score),
-            retrieval_score_weight,
-            reranker_score_weight,
-        )
-        reranked_by_user[user_id].append(
-            _TitleScore(candidate.title, candidate.retrieval_score, fused_score)
-        )
-
+) -> dict[int, _TitleScore]:
     return {
-        user_id: _top_scores(reranked_by_user.get(user_id, []), top_matches)
-        for user_id in candidates_by_user
+        user_id: max(scores, key=lambda item: item.retrieval_score)
+        for user_id, scores in scores_by_user.items()
+        if scores
     }
 
 
-def _average_score(scores: list[_TitleScore]) -> float:
-    if not scores:
-        return 0.0
-    return sum(item.score for item in scores) / len(scores)
+def _rerank_representative_titles_by_group(
+    query_text: str,
+    user_info: dict[int, tuple[str, list[str], list[str]]],
+    authored_by_user: dict[int, _TitleScore],
+    reviewed_by_user: dict[int, _TitleScore],
+    reranker_provider: CrossEncoderProvider | None,
+) -> dict[tuple[int, str], float]:
+    if reranker_provider is None:
+        raise RuntimeError("Reviewer reranker is unavailable.")
+
+    title_rerank_scores: dict[tuple[int, str], float] = {}
+    for group in (1, 2, 3):
+        pairs: list[tuple[str, str]] = []
+        keys: list[tuple[int, str]] = []
+        for user_id, (_, articles, reviewed_articles) in user_info.items():
+            if _reviewer_group(articles, reviewed_articles) != group:
+                continue
+            if group in (1, 3) and (authored := authored_by_user.get(user_id)):
+                pairs.append((query_text, authored.title))
+                keys.append((user_id, _AUTHORED_SOURCE))
+            if group in (1, 2) and (reviewed := reviewed_by_user.get(user_id)):
+                pairs.append((query_text, reviewed.title))
+                keys.append((user_id, _REVIEWED_SOURCE))
+
+        if not pairs:
+            continue
+        scores = reranker_provider.predict(pairs)
+        if len(scores) != len(keys):
+            raise RuntimeError("Reviewer reranker returned an invalid score count.")
+        title_rerank_scores.update(
+            (key, max(0.0, min(1.0, float(score))))
+            for key, score in zip(keys, scores)
+        )
+
+    return title_rerank_scores
 
 
-def _select_reviewer_score(authored_score: float, reviewed_score: float) -> float:
-    """Use the stronger of a reviewer's authored or reviewed-title matches."""
-    return max(authored_score, reviewed_score)
+def _reviewer_group(articles: list[str], reviewed_articles: list[str]) -> int:
+    if articles and reviewed_articles:
+        return 1
+    if reviewed_articles:
+        return 2
+    return 3
 
 
-@lru_cache(maxsize=4)
-def _build_cached_reviewer_matcher(domain_id: str, config: ReviewerConfig) -> ReviewerMatcher:
+def _calculate_reviewer_score(
+    group: int,
+    authored_score: float,
+    reviewed_score: float,
+) -> float:
+    if group == 1:
+        return 0.7 * reviewed_score + 0.3 * authored_score
+    if group == 2:
+        return reviewed_score
+    return authored_score
+
+
+def _reviewer_sort_key(
+    item: tuple[int, float, ReviewerSuggestion],
+) -> tuple[int, float, float, int]:
+    group, rank_score, suggestion = item
+    return (group, -rank_score, -suggestion.score, suggestion.user_id)
+
+
+_REVIEWER_MATCHER_CACHE: dict[tuple[str, ReviewerConfig], ReviewerMatcher] = {}
+
+
+def _build_reviewer_matcher(domain_id: str, config: ReviewerConfig) -> ReviewerMatcher:
     store_path = get_domain_store_path(config.store_path, domain_id)
     reranker = get_cross_encoder_provider(config.reranker_model_name)
 
     return ReviewerMatcher(
         store=ReviewerStore(store_path, config.collection),
-        embedding_provider=SbertEmbeddingProvider(config.model_name),
+        embedding_provider=get_embedding_provider(
+            config.model_name, config.embedding_batch_size, config.torch_num_threads
+        ),
         sparse_provider=SparseEmbeddingProvider(),
         reranker_provider=reranker,
         config=config,
@@ -320,11 +304,18 @@ def _build_cached_reviewer_matcher(domain_id: str, config: ReviewerConfig) -> Re
 
 
 def get_reviewer_matcher(domain_id: str, config: ReviewerConfig) -> ReviewerMatcher:
-    return _build_cached_reviewer_matcher(domain_id, config)
+    key = (domain_id, config)
+    matcher = _REVIEWER_MATCHER_CACHE.get(key)
+    if matcher is None:
+        matcher = _build_reviewer_matcher(domain_id, config)
+        _REVIEWER_MATCHER_CACHE[key] = matcher
+    return matcher
 
 
 def reset_reviewer_matcher() -> None:
-    _build_cached_reviewer_matcher.cache_clear()
+    for matcher in _REVIEWER_MATCHER_CACHE.values():
+        matcher.store.close()
+    _REVIEWER_MATCHER_CACHE.clear()
 
 
 def ingest_reviewers(
@@ -337,9 +328,17 @@ def ingest_reviewers(
     staging_path = target_path.parent / f".{target_path.name}.staging-{uuid.uuid4().hex}"
     staging_store = None
     try:
-        matcher = get_reviewer_matcher(domain_id, config)
         staging_store = ReviewerStore(staging_path, config.collection)
-        result = matcher.ingest(profiles, store=staging_store)
+        matcher = ReviewerMatcher(
+            store=staging_store,
+            embedding_provider=get_embedding_provider(
+                config.model_name, config.embedding_batch_size, config.torch_num_threads
+            ),
+            sparse_provider=SparseEmbeddingProvider(),
+            reranker_provider=get_cross_encoder_provider(config.reranker_model_name),
+            config=config,
+        )
+        result = matcher.ingest(profiles)
         staging_store.close()
         staging_store = None
 

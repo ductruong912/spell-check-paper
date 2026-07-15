@@ -121,6 +121,8 @@ class ValidPaperConfig:
     suitable_threshold: float
     model_name: str
     reranker_model_name: str
+    embedding_batch_size: int
+    torch_num_threads: int
 
 
 @dataclass(frozen=True)
@@ -129,12 +131,10 @@ class ReviewerConfig:
 
     store_path: str
     collection: str
-    top_matches: int
     model_name: str
     reranker_model_name: str
-    rerank_candidates: int
-    retrieval_score_weight: float
-    reranker_score_weight: float
+    embedding_batch_size: int
+    torch_num_threads: int
 
 
 def load_settings(env_file: str | Path | None = None) -> Settings:
@@ -190,22 +190,18 @@ def _validate_valid_paper_config(config: ValidPaperConfig) -> ValidPaperConfig:
         )
     if config.top_k <= 0:
         raise ValidPaperConfigurationError("VALID_TOP_K must be greater than zero.")
+    if config.embedding_batch_size <= 0:
+        raise ValidPaperConfigurationError("EMBEDDING_BATCH_SIZE must be greater than zero.")
+    if config.torch_num_threads < 0:
+        raise ValidPaperConfigurationError("TORCH_NUM_THREADS must not be negative.")
     return config
 
 
 def _validate_reviewer_config(config: ReviewerConfig) -> ReviewerConfig:
-    if config.top_matches <= 0:
-        raise ReviewerConfigurationError("REVIEWER_TOP_MATCHES must be greater than zero.")
-    if config.rerank_candidates <= 0:
-        raise ReviewerConfigurationError(
-            "REVIEWER_RERANK_CANDIDATES must be greater than zero."
-        )
-    if config.retrieval_score_weight < 0 or config.reranker_score_weight < 0:
-        raise ReviewerConfigurationError("Reviewer retrieval/reranker weights must not be negative.")
-    if config.retrieval_score_weight + config.reranker_score_weight <= 0:
-        raise ReviewerConfigurationError(
-            "At least one reviewer retrieval/reranker weight must be greater than zero."
-        )
+    if config.embedding_batch_size <= 0:
+        raise ReviewerConfigurationError("EMBEDDING_BATCH_SIZE must be greater than zero.")
+    if config.torch_num_threads < 0:
+        raise ReviewerConfigurationError("TORCH_NUM_THREADS must not be negative.")
     return config
 
 
@@ -227,12 +223,14 @@ def load_valid_paper_config() -> ValidPaperConfig:
         suitable_threshold=env_float("VALID_SUITABLE_THRESHOLD", 0.50),
         model_name=env_str(
             "VALID_MODEL_NAME",
-            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+            "BAAI/bge-base-en-v1.5",
         ),
         reranker_model_name=env_str(
             "VALID_RERANKER_MODEL_NAME",
             "cross-encoder/ms-marco-MiniLM-L-6-v2",
         ),
+        embedding_batch_size=env_int("EMBEDDING_BATCH_SIZE", 32),
+        torch_num_threads=env_int("TORCH_NUM_THREADS", 0),
     )
     return _validate_valid_paper_config(config)
 
@@ -241,12 +239,11 @@ def load_reviewer_config() -> ReviewerConfig:
     config = ReviewerConfig(
         store_path=env_str("REVIEWER_STORE_PATH", "data_reviewer_store"),
         collection=env_str("REVIEWER_COLLECTION", "reviewer_profiles"),
-        top_matches=env_int("REVIEWER_TOP_MATCHES", 3),
         model_name=env_str(
             "REVIEWER_MODEL_NAME",
             env_str(
                 "VALID_MODEL_NAME",
-                "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                "BAAI/bge-base-en-v1.5",
             ),
         ),
         reranker_model_name=env_str(
@@ -256,9 +253,8 @@ def load_reviewer_config() -> ReviewerConfig:
                 "cross-encoder/ms-marco-MiniLM-L-6-v2",
             ),
         ),
-        rerank_candidates=env_int("REVIEWER_RERANK_CANDIDATES", 10),
-        retrieval_score_weight=env_float("REVIEWER_RETRIEVAL_SCORE_WEIGHT", 0.4),
-        reranker_score_weight=env_float("REVIEWER_RERANKER_SCORE_WEIGHT", 0.6),
+        embedding_batch_size=env_int("EMBEDDING_BATCH_SIZE", 32),
+        torch_num_threads=env_int("TORCH_NUM_THREADS", 0),
     )
     return _validate_reviewer_config(config)
 

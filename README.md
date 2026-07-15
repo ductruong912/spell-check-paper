@@ -146,17 +146,17 @@ Gợi ý chuyên gia phản biện theo title bản thảo:
 }
 ```
 
-Hệ thống tính điểm toàn bộ chuyên gia đã nạp và trả về toàn bộ danh sách, sắp xếp theo `score` giảm dần. Frontend có thể default select all để người dùng tự bỏ chọn. Khi `explain=true`, response có thêm các title gần nhất trong `matched_articles` và `matched_reviewed_articles`.
+Hệ thống tính điểm toàn bộ chuyên gia đã nạp và trả về toàn bộ danh sách. Reviewer được sắp xếp ưu tiên tuyệt đối theo nhóm: (1) có cả bài đã viết và bài đã phản biện, (2) chỉ có bài đã phản biện, (3) chỉ có bài đã viết. Trong từng nhóm, danh sách được sắp xếp theo `score` giảm dần, rồi `user_id`. Khi `explain=true`, response có title đại diện gần nhất trong `matched_articles` và `matched_reviewed_articles`.
 
-Điểm mặc định ưu tiên nhẹ kinh nghiệm phản biện:
+Mỗi title được tính điểm retrieval bằng `0.7 * semantic_score + 0.3 * lexical_score`. Hệ thống dùng retrieval để chọn title đại diện cao nhất theo từng nguồn của mỗi reviewer, rồi rerank toàn bộ reviewer theo từng nhóm trên các title đại diện đó. `authored_score`, `reviewed_score` và `score` trả về đều dùng reranker và nằm trong thang `0..1`:
 
 ```text
-score = max(authored_score, reviewed_score)
+score_group_1 = 0.7 * reviewed_score + 0.3 * authored_score
+score_group_2 = reviewed_score
+score_group_3 = authored_score
 ```
 
-Reviewer được tính điểm theo nguồn có title phù hợp cao hơn: bài đã viết hoặc bài đã phản biện.
-Hệ thống luôn lấy candidate rộng hơn bằng `REVIEWER_RERANK_CANDIDATES`, chấm lại bằng reranker, rồi mới lấy `REVIEWER_TOP_MATCHES` title tốt nhất để tính điểm.
-Điểm mỗi title sau rerank được kết hợp theo công thức `retrieval_score * REVIEWER_RETRIEVAL_SCORE_WEIGHT + reranker_score * REVIEWER_RERANKER_SCORE_WEIGHT`.
+Vì toàn bộ reviewer có title đều được rerank, một `score` duy nhất vừa hiển thị vừa quyết định thứ tự trong group; không có hai thang điểm khác nhau.
 
 ```json
 {
@@ -188,10 +188,7 @@ Hệ thống luôn lấy candidate rộng hơn bằng `REVIEWER_RERANK_CANDIDATE
 - `VALID_RETRIEVAL_SCORE_WEIGHT`, `VALID_RERANKER_SCORE_WEIGHT`: trọng số fusion giữa điểm retrieval và reranker khi reranker được bật
 - `REVIEWER_STORE_PATH`: thư mục lưu Qdrant local store cho kho chuyên gia, mặc định `data_reviewer_store`
 - `REVIEWER_COLLECTION`: tên collection lưu title chuyên gia
-- `REVIEWER_TOP_MATCHES`: số title gần nhất dùng để giải thích và lấy trung bình điểm mỗi nhóm
 - `REVIEWER_RERANKER_MODEL_NAME`: model cross-encoder dùng để rerank reviewer title candidates
-- `REVIEWER_RERANK_CANDIDATES`: số candidate mỗi nhóm được rerank trước khi lấy `REVIEWER_TOP_MATCHES`, mặc định `10`
-- `REVIEWER_RETRIEVAL_SCORE_WEIGHT`, `REVIEWER_RERANKER_SCORE_WEIGHT`: trọng số kết hợp retrieval và reranker, mặc định lần lượt `0.4` và `0.6`
 
 ## Kiểm Thử
 

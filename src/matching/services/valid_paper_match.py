@@ -21,9 +21,9 @@ from domain_ids import get_domain_store_path, swap_store_directories
 from .embeddings import (
     CrossEncoderProvider,
     EmbeddingProvider,
-    SbertEmbeddingProvider,
     SparseEmbeddingProvider,
     cosine_similarity,
+    get_embedding_provider,
     get_cross_encoder_provider,
 )
 from ..models.matching import ValidPaperMatch, ValidPaperResult, ValidPaperSideResult
@@ -235,7 +235,9 @@ def _build_cached_matcher(domain_id: str, config: ValidPaperConfig) -> ValidPape
         str(store_path), config.title_collection, config.keyword_collection
     )
 
-    provider = SbertEmbeddingProvider(config.model_name)
+    provider = get_embedding_provider(
+        config.model_name, config.embedding_batch_size, config.torch_num_threads
+    )
     sparse_provider = SparseEmbeddingProvider()
     
     reranker = get_cross_encoder_provider(config.reranker_model_name)
@@ -292,26 +294,33 @@ def replace_valid_paper_batch(
         if not title_texts and not keyword_texts:
             raise ValueError("No valid titles or keywords found in the batch.")
 
-        provider = SbertEmbeddingProvider(config.model_name)
+        provider = get_embedding_provider(
+            config.model_name, config.embedding_batch_size, config.torch_num_threads
+        )
         sparse_provider = SparseEmbeddingProvider()
         staging_store = ValidPaperStore(
             str(staging_path), config.title_collection, config.keyword_collection
         )
 
+        all_texts = title_texts + keyword_texts
+        all_embeddings = provider.embed_passages(all_texts) if all_texts else []
+        all_sparse_embeddings = sparse_provider.embed_texts(all_texts) if all_texts else []
+        title_count = len(title_texts)
+
         if title_texts:
             staging_store.add_titles(
                 ids=title_ids,
                 texts=title_texts,
-                embeddings=provider.embed_passages(title_texts),
-                sparse_embeddings=sparse_provider.embed_texts(title_texts),
+                embeddings=all_embeddings[:title_count],
+                sparse_embeddings=all_sparse_embeddings[:title_count],
                 model_name=config.model_name,
             )
         if keyword_texts:
             staging_store.add_keywords(
                 ids=keyword_ids,
                 texts=keyword_texts,
-                embeddings=provider.embed_passages(keyword_texts),
-                sparse_embeddings=sparse_provider.embed_texts(keyword_texts),
+                embeddings=all_embeddings[title_count:],
+                sparse_embeddings=all_sparse_embeddings[title_count:],
                 model_name=config.model_name,
             )
         staging_store.close()
