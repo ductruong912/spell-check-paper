@@ -199,6 +199,7 @@ class ReviewerMatcher:
             suggestion = ReviewerSuggestion(
                 user_id=user_id,
                 user=user,
+                group=group,
                 score=score,
                 authored_score=authored_score,
                 reviewed_score=reviewed_score,

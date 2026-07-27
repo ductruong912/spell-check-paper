@@ -138,8 +138,14 @@ class ReviewerSuggestionItem(BaseModel):
     matched_reviewed_articles: list[str] | None = None
 
 
+class ReviewerSuggestionPools(BaseModel):
+    pool_1: list[ReviewerSuggestionItem] = Field(default_factory=list)
+    pool_2: list[ReviewerSuggestionItem] = Field(default_factory=list)
+    pool_3: list[ReviewerSuggestionItem] = Field(default_factory=list)
+
+
 class ReviewerSuggestResponse(BaseModel):
-    suggestions: list[ReviewerSuggestionItem]
+    suggestions: ReviewerSuggestionPools
 
 
 def _normalize_domain_id(value: str) -> str:
@@ -322,8 +328,13 @@ async def suggest_reviewers_endpoint(
         logger.exception("Reviewer suggestion failed.")
         raise HTTPException(status_code=500, detail="Reviewer suggestion failed.") from exc
 
-    return {
-        "suggestions": [
+    pools: dict[str, list[dict[str, Any]]] = {
+        "pool_1": [],
+        "pool_2": [],
+        "pool_3": [],
+    }
+    for suggestion in suggestions:
+        pools[f"pool_{suggestion.group}"].append(
             {
                 "user_id": suggestion.user_id,
                 "user": suggestion.user,
@@ -335,9 +346,9 @@ async def suggest_reviewers_endpoint(
                     suggestion.matched_reviewed_articles if request.explain else None
                 ),
             }
-            for suggestion in suggestions
-        ]
-    }
+        )
+
+    return {"suggestions": pools}
 
 
 def _is_supported_document(filename: str) -> bool:

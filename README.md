@@ -160,17 +160,21 @@ Vì toàn bộ reviewer có title đều được rerank, một `score` duy nh�
 
 ```json
 {
-  "suggestions": [
-    {
-      "user_id": 2,
-      "user": "admin2",
-      "score": 0.87,
-      "authored_score": 0.82,
-      "reviewed_score": 0.91,
-      "matched_articles": ["The Example 1"],
-      "matched_reviewed_articles": ["The Example 3"]
-    }
-  ]
+  "suggestions": {
+    "pool_1": [
+      {
+        "user_id": 2,
+        "user": "admin2",
+        "score": 0.87,
+        "authored_score": 0.82,
+        "reviewed_score": 0.91,
+        "matched_articles": ["The Example 1"],
+        "matched_reviewed_articles": ["The Example 3"]
+      }
+    ],
+    "pool_2": [],
+    "pool_3": []
+  }
 }
 ```
 

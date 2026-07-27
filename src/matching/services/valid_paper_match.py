@@ -123,8 +123,13 @@ class ValidPaperMatcher:
         
         from qdrant_client.models import SparseVector
         
-        indices = sparse_se.indices.tolist() if hasattr(sparse_se.indices, "tolist") else sparse_se.indices
-        values = sparse_se.values.tolist() if hasattr(sparse_se.values, "tolist") else sparse_se.values
+        sparse_items = [
+            (int(str(index)), float(str(value)))
+            for index, value in zip(sparse_se.indices, sparse_se.values)
+            if index is not None and value is not None
+        ]
+        indices = [index for index, _ in sparse_items]
+        values = [value for _, value in sparse_items]
         sparse_vector = SparseVector(indices=indices, values=values)
         
         ideal_bm25 = sum(v * v for v in values)

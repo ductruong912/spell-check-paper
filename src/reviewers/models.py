@@ -38,9 +38,9 @@ class ReviewerStoredTitle:
 class ReviewerSuggestion:
     user_id: int
     user: str
+    group: int
     score: float
     authored_score: float
     reviewed_score: float
     matched_articles: list[str] = field(default_factory=list)
     matched_reviewed_articles: list[str] = field(default_factory=list)
-

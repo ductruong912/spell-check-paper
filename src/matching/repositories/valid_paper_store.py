@@ -76,8 +76,13 @@ class ValidPaperStore:
                 vectors["dense"] = dense_embeddings[i]
             if sparse_embeddings and i < len(sparse_embeddings):
                 se = sparse_embeddings[i]
-                indices = se.indices.tolist() if hasattr(se.indices, "tolist") else se.indices
-                values = se.values.tolist() if hasattr(se.values, "tolist") else se.values
+                sparse_items = [
+                    (int(str(index)), float(str(value)))
+                    for index, value in zip(se.indices, se.values)
+                    if index is not None and value is not None
+                ]
+                indices = [index for index, _ in sparse_items]
+                values = [value for _, value in sparse_items]
                 vectors["sparse"] = SparseVector(indices=indices, values=values)
 
             point = PointStruct(

@@ -61,16 +61,15 @@ class ReviewerStore:
             vectors: dict[str, Any] = {"dense": dense_embeddings[index]}
             if sparse_embeddings and index < len(sparse_embeddings):
                 sparse_embedding = sparse_embeddings[index]
-                indices = (
-                    sparse_embedding.indices.tolist()
-                    if hasattr(sparse_embedding.indices, "tolist")
-                    else sparse_embedding.indices
-                )
-                values = (
-                    sparse_embedding.values.tolist()
-                    if hasattr(sparse_embedding.values, "tolist")
-                    else sparse_embedding.values
-                )
+                sparse_items = [
+                    (int(str(index)), float(str(value)))
+                    for index, value in zip(
+                        sparse_embedding.indices, sparse_embedding.values
+                    )
+                    if index is not None and value is not None
+                ]
+                indices = [index for index, _ in sparse_items]
+                values = [value for _, value in sparse_items]
                 vectors["sparse"] = SparseVector(indices=indices, values=values)
 
             points.append(
@@ -109,17 +108,18 @@ class ReviewerStore:
                 vectors = point.vector or {}
                 dense_vector = vectors.get("dense") if isinstance(vectors, dict) else None
                 sparse_vector = vectors.get("sparse") if isinstance(vectors, dict) else None
-                if dense_vector is None:
+                if not isinstance(dense_vector, list):
                     continue
+                dense_values = [float(str(value)) for value in dense_vector]
                 stored.append(
                     ReviewerStoredTitle(
-                        user_id=int(payload.get("user_id")),
+                        user_id=int(str(payload.get("user_id") or 0)),
                         user=str(payload.get("user") or ""),
                         source=str(payload.get("source") or ""),
                         title=str(payload.get("title") or ""),
                         articles=list(payload.get("articles") or []),
                         reviewed_articles=list(payload.get("reviewed_articles") or []),
-                        dense_vector=dense_vector,
+                        dense_vector=dense_values,
                         sparse_vector=sparse_vector,
                     )
                 )
