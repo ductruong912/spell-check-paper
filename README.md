@@ -1,175 +1,249 @@
 # ArticleCheck AI
 
-Ứng dụng kiểm tra cấu trúc bài báo khoa học từ file DOCX/PDF, so khớp title/keywords với kho bài báo hợp lệ theo từng lĩnh vực, và gợi ý chuyên gia phản biện dựa trên title.
+An intelligent AI-powered system for scientific manuscript structure verification, domain-scoped title/keyword validation, and peer reviewer recommendations.
 
-## Tính Năng Chính
+---
 
-- Giao diện Streamlit để upload DOCX/PDF, xem trước tài liệu và kiểm tra cấu trúc bài báo.
-- API FastAPI cho kiểm tra cấu trúc và quản lý kho bài báo hợp lệ.
-- Trích xuất text DOCX/PDF local bằng `python-docx` và PyMuPDF.
-- Xem trước PDF/DOCX local. DOCX ưu tiên chuyển sang PDF bằng LibreOffice, fallback sang HTML bằng Mammoth.
-- Phân loại cấu trúc bằng OpenAI, với template cấu trúc có thể cấu hình qua JSON.
-- So khớp title và keywords bằng dense embedding, sparse BM25 vector trong Qdrant, và reranker tùy chọn.
-- Gợi ý chuyên gia phản biện từ title bài đã viết và title bài đã từng phản biện.
+## Key Features
 
-Các mục cấu trúc mặc định nằm trong [src/structure/templates/default.json](src/structure/templates/default.json).
+- **Document Ingestion & Preview**: Local text extraction and document preview for DOCX and PDF manuscripts using `python-docx` and `PyMuPDF` (with LibreOffice PDF rendering fallback to HTML via Mammoth).
+- **Manuscript Structure Analysis**: LLM-driven section extraction and structure compliance checking via OpenAI, fully customizable through JSON templates.
+- **Domain-Scoped Relevance Matching**: Hybrid dense retrieval (`sentence-transformers`), lexical sparse vectors (BM25), and cross-encoder reranking within Qdrant local vector stores.
+- **Intelligent Reviewer Recommendation**: Recommends candidate reviewers grouped into prioritized pools based on published manuscript history and past review experience.
+- **Dual Interface**:
+  - **Streamlit Web UI**: Interactive dashboard for uploading manuscripts, previewing pages, and inspecting structure validation reports in real time.
+  - **FastAPI Backend**: Production-ready RESTful endpoints for integration into editorial and publishing workflows.
 
-## Cài Đặt
+---
 
-Yêu cầu:
+## Architecture & Project Structure
 
-- Python 3.10 trở lên
-- OpenAI API key
-- LibreOffice nếu muốn preview DOCX gần bản gốc hơn
-
-Tạo môi trường và cài dependency:
-
-```bash
-python -m venv venv
-venv\Scripts\python -m pip install --upgrade pip
-venv\Scripts\python -m pip install -r requirements.txt
+```text
+.
+├── app.py                     # Streamlit web UI
+├── main.py                    # FastAPI entrypoint
+├── requirements.txt           # Python dependencies
+├── src/
+│   ├── config.py              # Configuration & settings management
+│   ├── services.py            # Orchestration layer for document processing
+│   ├── validation.py          # Input validation, OpenAI client setup, error mapping
+│   ├── domain_ids.py          # Domain ID normalization and store path handling
+│   ├── documents/
+│   │   ├── parser.py          # Document parsing (DOCX / PDF to unified DocumentView)
+│   │   ├── extract.py         # Text extraction routines
+│   │   ├── preview.py         # PDF rendering & DOCX-to-HTML/PDF preview
+│   │   └── temp_files.py      # Lifecycle management for temporary files
+│   ├── structure/
+│   │   ├── classifier.py      # LLM section classification & output normalization
+│   │   ├── checker.py         # Confidence thresholding & StructureReport generation
+│   │   ├── models.py          # Data models for structure checking
+│   │   ├── prompt.py          # LLM prompts for section extraction
+│   │   ├── template.py        # Structure template loader & validator
+│   │   └── templates/
+│   │       └── default.json   # Default manuscript sections template
+│   ├── matching/
+│   │   ├── models/matching.py # Data schemas for manuscript matching
+│   │   ├── repositories/
+│   │   │   └── valid_paper_store.py # Domain-scoped Qdrant store for valid papers
+│   │   └── services/
+│   │       ├── embeddings.py        # Dense & sparse vector embeddings
+│   │       ├── preprocessing.py     # Text cleaning & normalization
+│   │       └── valid_paper_match.py # Hybrid retrieval & scoring engine
+│   ├── reviewers/
+│   │   ├── models.py          # Data models for reviewer profiles & suggestions
+│   │   ├── repositories/
+│   │   │   └── reviewer_store.py    # Vector repository for reviewer expertise
+│   │   └── services/
+│   │       └── reviewer_suggestion.py # Scoring, reranking, and pool organization
+│   └── ui/
+│       ├── layout.py          # Layout components for Streamlit
+│       ├── render.py          # HTML/CSS renderers for preview and reports
+│       └── theme.py           # Design tokens, color palette, and stylesheet
+└── tests/
 ```
 
-Tạo file `.env` từ `.env.example`:
+---
 
-```bash
-cp .env.example .env
-```
+## Getting Started
 
-## Chạy Ứng Dụng
+### Prerequisites
 
-Streamlit:
+- **Python**: 3.10 or later
+- **OpenAI API Key**: Required for structure classification (`OPENAI_API_KEY`)
+- **LibreOffice** *(Optional)*: Recommended for high-fidelity DOCX-to-PDF rendering
+
+### Installation
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/ductruong912/spell-check-paper.git
+   cd spell-check-paper
+   ```
+
+2. **Create and activate a virtual environment**:
+   ```bash
+   python -m venv venv
+   # On Windows:
+   venv\Scripts\activate
+   # On Linux/macOS:
+   source venv/bin/activate
+   ```
+
+3. **Install dependencies**:
+   ```bash
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
+4. **Configure environment variables**:
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` and set your `OPENAI_API_KEY`.
+
+---
+
+## Running the Application
+
+### Streamlit Web Interface
 
 ```bash
 streamlit run app.py
 ```
+Open your browser at `http://localhost:8501` to use the interactive manuscript review interface.
 
-FastAPI:
+### FastAPI Server
 
 ```bash
 python main.py
-# hoặc
-uvicorn main:app --reload
+# or using uvicorn directly:
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+Access the interactive Swagger API documentation at:
+- `http://127.0.0.1:8000/docs`
+
+---
+
+## REST API Reference
+
+All domain-specific endpoints require an `id` query parameter (e.g., `?id=sample_domain`). Domain IDs are case-insensitive and automatically trimmed and lowercased.
+
+### 1. Manuscript Structure Check
+
+`POST /check-structure?id=sample_domain`
+
+Upload a manuscript (`.docx` or `.pdf`) to extract metadata and verify required sections against the structure template.
+
+**Form Data:**
+- `file`: Multipart binary file (`.docx` or `.pdf`)
+
+**Response:**
+```json
+{
+  "sections": {
+    "title_en": {
+      "present": true,
+      "confidence": 0.98,
+      "evidence": "Deep Learning Approaches for Natural Language Processing",
+      "reason": "Clear standalone title found in header."
+    },
+    "abstract_en": {
+      "present": true,
+      "confidence": 0.95,
+      "evidence": "This paper presents...",
+      "reason": "Abstract section detected with accompanying summary text."
+    }
+  },
+  "extracted": {
+    "title_en": "Deep Learning Approaches for Natural Language Processing",
+    "keywords_en": ["deep learning", "nlp", "transformers"]
+  },
+  "metadata": {
+    "title": "Deep Learning Approaches for Natural Language Processing",
+    "keywords": ["deep learning", "nlp", "transformers"],
+    "language": "en"
+  },
+  "domain_match": {
+    "overall_score": 0.86,
+    "title_score": 0.84,
+    "keyword_score": 0.88,
+    "is_suitable": true
+  }
+}
 ```
 
-## Cấu Trúc Dự Án
+---
 
-```text
-.
-├── app.py                     # Streamlit UI
-├── main.py                    # FastAPI entrypoint
-├── requirements.txt
-├── src/
-│   ├── config.py              # Settings, ValidPaperConfig, ReviewerConfig và helper đọc biến môi trường
-│   ├── services.py            # Orchestration cho parse, preview, structure check
-│   ├── validation.py          # Validate API key, tạo OpenAI client, map lỗi
-│   ├── documents/
-│   │   ├── parser.py          # Parse DOCX/PDF thành DocumentView
-│   │   ├── extract.py         # Text extraction wrapper
-│   │   ├── preview.py         # Preview PDF/DOCX
-│   │   └── temp_files.py
-│   ├── structure/
-│   │   ├── classifier.py      # Gọi OpenAI và chuẩn hóa output
-│   │   ├── checker.py         # Áp ngưỡng confidence và tạo StructureReport
-│   │   ├── models.py
-│   │   ├── prompt.py
-│   │   ├── template.py
-│   │   └── templates/default.json
-│   ├── matching/
-│   │   ├── models/matching.py
-│   │   ├── repositories/valid_paper_store.py
-│   │   └── services/
-│   │       ├── embeddings.py
-│   │       ├── preprocessing.py
-│   │       └── valid_paper_match.py
-│   ├── reviewers/
-│   │   ├── models.py
-│   │   ├── repositories/reviewer_store.py
-│   │   └── services/reviewer_suggestion.py
-│   └── ui/
-│       ├── layout.py
-│       ├── render.py
-│       └── theme.py
-└── tests/
-```
+### 2. Valid Papers Ingestion
 
-## API
+`POST /valid-papers/ingest/batch?id=sample_domain`
 
-### `POST /check-structure?id=sample_domain`
+Batch-ingest reference manuscripts into the vector store for a specific domain. Uses safe-swap staging to guarantee atomic index updates.
 
-Multipart request with query parameter:
-
-- `id` (query): domain id dùng để so khớp với kho bài hợp lệ; hệ thống tự trim và chuyển về chữ thường
-- `file`: file DOCX/PDF
-
-Response là JSON đã chuẩn hóa từ classifier:
-
-- `sections`: từng mục có `present`, `confidence`, `evidence`, `reason`
-- `extracted`: title và keywords theo tiếng Việt/tiếng Anh
-- `metadata`: title/keywords đã gộp, ưu tiên tiếng Anh cho bài song ngữ
-- `domain_match`: điểm so khớp với kho bài hợp lệ nếu kho đã được nạp
-
-Các API có `id` đều nhận `id` bằng query parameter bắt buộc (`?id=sample_domain`), gồm:
-`/valid-papers/ingest/batch`, `/valid-papers/match`,
-`/reviewers/ingest`, `/reviewers/suggest` và `/check-structure`.
-`id` không phân biệt hoa thường và được chuẩn hóa thành chữ thường trước khi lấy kho dữ liệu.
-
-`POST /valid-papers/ingest/batch` nhận toàn bộ title + keywords và thay thế toàn bộ kho của domain. Hệ thống build embedding vào kho tạm trước; chỉ khi build thành công mới thay kho cũ. Nếu build lỗi, kho cũ được giữ nguyên.
-
-`POST /reviewers/ingest?id=sample_domain` cũng nhận toàn bộ reviewer của domain và thay thế toàn bộ kho reviewer theo cùng cơ chế kho tạm/swap an toàn.
-
-### `POST /reviewers/ingest?id=sample_domain`
-
-Nạp kho chuyên gia theo từng domain id:
-
+**Request Body:**
 ```json
 [
   {
-    "user_id": 1,
-    "user": "admin",
-    "article": "The Example 1, The Example 2",
-    "article_review": ["The Example 3", "The Example 4"]
+    "title": "Attention Is All You Need",
+    "keywords": ["attention mechanism", "neural networks", "transformer"]
   }
 ]
 ```
 
-`article` và `article_review` nhận chuỗi phân tách bằng dấu phẩy/chấm phẩy hoặc list string. Mỗi title được lưu vào Qdrant local store kèm payload `user_id`, `user`, `articles`, `reviewed_articles`.
+---
 
-### `POST /reviewers/suggest?id=sample_domain`
+### 3. Reviewer Profiles Ingestion
 
-Gợi ý chuyên gia phản biện theo title bản thảo:
+`POST /reviewers/ingest?id=sample_domain`
 
+Populate reviewer profiles for a domain, including authored papers and previous review assignments.
+
+**Request Body:**
+```json
+[
+  {
+    "user_id": 101,
+    "user": "reviewer_alex",
+    "article": "A Survey on Graph Neural Networks, Transformer Optimization",
+    "article_review": ["Attention Models in Vision", "Self-Supervised Speech"]
+  }
+]
+```
+
+---
+
+### 4. Reviewer Recommendation
+
+`POST /reviewers/suggest?id=sample_domain`
+
+Recommends suitable reviewers ranked by relevance to the submitted manuscript title.
+
+**Request Body:**
 ```json
 {
-  "title": "The submitted article title",
+  "title": "Self-Supervised Vision Transformers for Biomedical Imaging",
   "explain": true
 }
 ```
 
-Hệ thống tính điểm toàn bộ chuyên gia đã nạp và trả về toàn bộ danh sách. Reviewer được sắp xếp ưu tiên tuyệt đối theo nhóm: (1) có cả bài đã viết và bài đã phản biện, (2) chỉ có bài đã phản biện, (3) chỉ có bài đã viết. Trong từng nhóm, danh sách được sắp xếp theo `score` giảm dần, rồi `user_id`. Khi `explain=true`, response có title đại diện gần nhất trong `matched_articles` và `matched_reviewed_articles`.
-
-Mỗi title được tính điểm retrieval bằng `0.7 * semantic_score + 0.3 * lexical_score`. Hệ thống dùng retrieval để chọn title đại diện cao nhất theo từng nguồn của mỗi reviewer, rồi rerank toàn bộ reviewer theo từng nhóm trên các title đại diện đó. `authored_score`, `reviewed_score` và `score` trả về đều dùng reranker và nằm trong thang `0..1`:
-
-```text
-score_group_1 = 0.7 * reviewed_score + 0.3 * authored_score
-score_group_2 = reviewed_score
-score_group_3 = authored_score
-```
-
-Vì toàn bộ reviewer có title đều được rerank, một `score` duy nhất vừa hiển thị vừa quyết định thứ tự trong group; không có hai thang điểm khác nhau.
+**Response:**
+Reviewers are categorized into three prioritized pools:
+1. **Pool 1**: Reviewers with matching experience in *both* authored papers and past peer reviews.
+2. **Pool 2**: Reviewers with matching experience in *past peer reviews*.
+3. **Pool 3**: Reviewers with matching experience in *authored papers*.
 
 ```json
 {
   "suggestions": {
     "pool_1": [
       {
-        "user_id": 2,
-        "user": "admin2",
-        "score": 0.87,
-        "authored_score": 0.82,
-        "reviewed_score": 0.91,
-        "matched_articles": ["The Example 1"],
-        "matched_reviewed_articles": ["The Example 3"]
+        "user_id": 101,
+        "user": "reviewer_alex",
+        "score": 0.91,
+        "authored_score": 0.88,
+        "reviewed_score": 0.93,
+        "matched_articles": ["Transformer Optimization"],
+        "matched_reviewed_articles": ["Attention Models in Vision"]
       }
     ],
     "pool_2": [],
@@ -178,24 +252,37 @@ Vì toàn bộ reviewer có title đều được rerank, một `score` duy nh�
 }
 ```
 
-## Cấu Hình Chính
+---
 
-- `DEFAULT_LLM_MODEL`: model OpenAI dùng cho classifier
-- `OPENAI_MAX_TOKENS`: giới hạn output tokens khi gọi OpenAI
-- `OPENAI_TEMPERATURE`: temperature khi gọi OpenAI
-- `STRUCTURE_TEMPLATE_PATH`: đường dẫn template cấu trúc thay thế
-- `STRUCTURE_TIMEOUT_SECONDS`: timeout kiểm tra cấu trúc
-- `VALID_PAPER_STORE_PATH`: thư mục lưu Qdrant local store cho kho bài hợp lệ, mặc định `data_valid_paper_store`
-- `VALID_MODEL_NAME`: model dense embedding
-- `VALID_TOP_K`, `VALID_EVAL_TOP_N`: số lượng candidate và số match dùng tính điểm
-- `VALID_TITLE_*`, `VALID_KEYWORD_*`: trọng số semantic/lexical và trọng số tổng hợp
-- `VALID_RETRIEVAL_SCORE_WEIGHT`, `VALID_RERANKER_SCORE_WEIGHT`: trọng số fusion giữa điểm retrieval và reranker khi reranker được bật
-- `REVIEWER_STORE_PATH`: thư mục lưu Qdrant local store cho kho chuyên gia, mặc định `data_reviewer_store`
-- `REVIEWER_COLLECTION`: tên collection lưu title chuyên gia
-- `REVIEWER_RERANKER_MODEL_NAME`: model cross-encoder dùng để rerank reviewer title candidates
+## Configuration Reference
 
-## Kiểm Thử
+Key settings configurable via environment variables in `.env`:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `OPENAI_API_KEY` | *(None)* | OpenAI API key for manuscript structure classification |
+| `DEFAULT_LLM_MODEL` | `gpt-4.1-mini` | LLM model used for classification |
+| `DEFAULT_MIN_CONFIDENCE` | `0.70` | Minimum confidence score to accept an extracted section |
+| `STRUCTURE_TEMPLATE_PATH` | *(Default)* | Custom JSON template file for section criteria |
+| `VALID_PAPER_STORE_PATH` | `data_valid_paper_store` | Path for domain-scoped valid paper Qdrant stores |
+| `VALID_MODEL_NAME` | `BAAI/bge-small-en-v1.5` | Dense embedding model for manuscripts |
+| `VALID_RERANKER_MODEL_NAME` | `cross-encoder/stsb-distilroberta-base` | Cross-encoder model for reranking candidates |
+| `VALID_SUITABLE_THRESHOLD` | `0.50` | Threshold score for domain suitability decision |
+| `REVIEWER_STORE_PATH` | `data_reviewer_store` | Path for Qdrant reviewer expertise stores |
+| `REVIEWER_RERANKER_MODEL_NAME`| `cross-encoder/stsb-distilroberta-base` | Cross-encoder model for reviewer candidate scoring |
+
+---
+
+## Testing
+
+Run unit and integration tests using `pytest`:
 
 ```bash
-venv\Scripts\python -m pytest -q
+pytest -q
 ```
+
+---
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
