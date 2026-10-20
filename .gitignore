@@ -15,7 +15,6 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
-/data_vnu
 /data_valid_paper_store
 /data_reviewer_store
 .codegraph/

@@ -95,7 +95,7 @@ uvicorn main:app --reload
 
 ## API
 
-### `POST /check-structure?id=csce`
+### `POST /check-structure?id=sample_domain`
 
 Multipart request with query parameter:
 
@@ -109,16 +109,16 @@ Response là JSON đã chuẩn hóa từ classifier:
 - `metadata`: title/keywords đã gộp, ưu tiên tiếng Anh cho bài song ngữ
 - `domain_match`: điểm so khớp với kho bài hợp lệ nếu kho đã được nạp
 
-Các API có `id` đều nhận `id` bằng query parameter bắt buộc (`?id=csce`), gồm:
+Các API có `id` đều nhận `id` bằng query parameter bắt buộc (`?id=sample_domain`), gồm:
 `/valid-papers/ingest/batch`, `/valid-papers/match`,
 `/reviewers/ingest`, `/reviewers/suggest` và `/check-structure`.
 `id` không phân biệt hoa thường và được chuẩn hóa thành chữ thường trước khi lấy kho dữ liệu.
 
 `POST /valid-papers/ingest/batch` nhận toàn bộ title + keywords và thay thế toàn bộ kho của domain. Hệ thống build embedding vào kho tạm trước; chỉ khi build thành công mới thay kho cũ. Nếu build lỗi, kho cũ được giữ nguyên.
 
-`POST /reviewers/ingest?id=csce` cũng nhận toàn bộ reviewer của domain và thay thế toàn bộ kho reviewer theo cùng cơ chế kho tạm/swap an toàn.
+`POST /reviewers/ingest?id=sample_domain` cũng nhận toàn bộ reviewer của domain và thay thế toàn bộ kho reviewer theo cùng cơ chế kho tạm/swap an toàn.
 
-### `POST /reviewers/ingest?id=CSCE`
+### `POST /reviewers/ingest?id=sample_domain`
 
 Nạp kho chuyên gia theo từng domain id:
 
@@ -135,7 +135,7 @@ Nạp kho chuyên gia theo từng domain id:
 
 `article` và `article_review` nhận chuỗi phân tách bằng dấu phẩy/chấm phẩy hoặc list string. Mỗi title được lưu vào Qdrant local store kèm payload `user_id`, `user`, `articles`, `reviewed_articles`.
 
-### `POST /reviewers/suggest?id=CSCE`
+### `POST /reviewers/suggest?id=sample_domain`
 
 Gợi ý chuyên gia phản biện theo title bản thảo:
 

@@ -11,8 +11,8 @@ import streamlit as st
 def _format_structure_status(section_id: str, hit: Dict[str, Any]) -> str:
     ok = (hit or {}).get("status") == "ok"
     if not ok:
-        return '<span class="tnt-status tnt-status--missing">Thiếu</span>'
-    return '<span class="tnt-status tnt-status--ok">Có</span>'
+        return '<span class="app-status app-status--missing">Thiếu</span>'
+    return '<span class="app-status app-status--ok">Có</span>'
 
 
 def _structure_summary(structure: Dict[str, Any]) -> Dict[str, Any]:
@@ -49,10 +49,10 @@ def render_sidebar_summary(placeholder, structure: Dict[str, Any]) -> None:
 
     summary = _structure_summary(structure)
     placeholder.markdown(
-        '<div class="tnt-sidebar-label">Tóm tắt kiểm tra</div>'
-        '<div class="tnt-sidebar-summary">'
-        f'<div class="tnt-summary-card tnt-summary-card--found"><strong>{summary["found"]}</strong>Đã tìm thấy</div>'
-        f'<div class="tnt-summary-card tnt-summary-card--missing"><strong>{summary["missing"]}</strong>Còn thiếu</div>'
+        '<div class="app-sidebar-label">Tóm tắt kiểm tra</div>'
+        '<div class="app-sidebar-summary">'
+        f'<div class="app-summary-card app-summary-card--found"><strong>{summary["found"]}</strong>Đã tìm thấy</div>'
+        f'<div class="app-summary-card app-summary-card--missing"><strong>{summary["missing"]}</strong>Còn thiếu</div>'
         "</div>",
         unsafe_allow_html=True,
     )
@@ -65,10 +65,10 @@ def structure_section_html(structure: Dict[str, Any]) -> str:
     if structure.get("error"):
         message = html.escape(str(structure["error"]))
         return (
-            '<div class="tnt-results tnt-results--error">'
-            '<div class="tnt-results__head">'
-            '<div class="tnt-results__title">Không thể kiểm tra cấu trúc</div>'
-            f'<div class="tnt-results__summary">{message}</div>'
+            '<div class="app-results app-results--error">'
+            '<div class="app-results__head">'
+            '<div class="app-results__title">Không thể kiểm tra cấu trúc</div>'
+            f'<div class="app-results__summary">{message}</div>'
             "</div></div>"
         )
 
@@ -81,21 +81,21 @@ def structure_section_html(structure: Dict[str, Any]) -> str:
 
     for row in structure_result_rows({"sections": sections}):
         label = html.escape(row["label"])
-        required_mark = '<span class="tnt-required">*</span>' if row["required"] else ""
+        required_mark = '<span class="app-required">*</span>' if row["required"] else ""
         rows.append(
-            '<div class="tnt-result-row">'
-            f'<span class="tnt-result-label">{label} {required_mark}</span>'
+            '<div class="app-result-row">'
+            f'<span class="app-result-label">{label} {required_mark}</span>'
             f'{row["status_html"]}'
             "</div>"
         )
 
     return (
-        '<div class="tnt-results">'
-        '<div class="tnt-results__head">'
-        '<div class="tnt-results__title">Kết quả cấu trúc</div>'
-        f'<div class="tnt-results__summary">Đã tìm thấy {found}/{total} mục yêu cầu</div>'
-        '<div class="tnt-progress">'
-        f'<div class="tnt-progress__bar" style="width:{progress:.1f}%"></div>'
+        '<div class="app-results">'
+        '<div class="app-results__head">'
+        '<div class="app-results__title">Kết quả cấu trúc</div>'
+        f'<div class="app-results__summary">Đã tìm thấy {found}/{total} mục yêu cầu</div>'
+        '<div class="app-progress">'
+        f'<div class="app-progress__bar" style="width:{progress:.1f}%"></div>'
         "</div></div>"
         f"{''.join(rows)}"
         "</div>"

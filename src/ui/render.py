@@ -60,14 +60,14 @@ _IFRAME_CSS = """
 <style>
 html, body { margin:0; padding:0; }
 body { background:#e5eaed; color:#111827; font-family:"Times New Roman",Times,serif; font-size:16px; line-height:1.55; }
-.tnt-doc {
+.app-doc {
   box-sizing:border-box; width:min(100%,794px); min-height:1123px; margin:16px auto;
   padding:72px 76px; background:#fff; box-shadow:0 1px 8px rgba(0,0,0,.18);
 }
-.tnt-doc img { max-width:100%; height:auto; }
-.tnt-doc table { width:100%; border-collapse:collapse; }
-.tnt-doc td,.tnt-doc th { border:1px solid #9ca3af; padding:4px 6px; }
-@media (max-width:700px) { .tnt-doc { margin:0; padding:24px; } }
+.app-doc img { max-width:100%; height:auto; }
+.app-doc table { width:100%; border-collapse:collapse; }
+.app-doc td,.app-doc th { border:1px solid #9ca3af; padding:4px 6px; }
+@media (max-width:700px) { .app-doc { margin:0; padding:24px; } }
 </style>
 """
 
@@ -95,10 +95,10 @@ def _workspace_state_details(state: str) -> tuple[str, str, str]:
     if state == "running":
         return "", "Đang xử lý", ""
     if state == "timeout":
-        return "", "Quá thời gian", " tnt-chip--error"
+        return "", "Quá thời gian", " app-chip--error"
     if state == "error":
-        return "", "Có lỗi", " tnt-chip--error"
-    return "", "Hoàn tất", " tnt-chip--success"
+        return "", "Có lỗi", " app-chip--error"
+    return "", "Hoàn tất", " app-chip--success"
 
 
 def render_workspace_header(
@@ -118,15 +118,15 @@ def render_workspace_header(
     suffix = Path(file_name).suffix.lower().lstrip(".").upper() or "Tài liệu"
     size_kb = file_size / 1024 if file_size else 0
     chips = (
-        f'<span class="tnt-chip">{suffix} · {size_kb:,.1f} KB</span>'
-        f'<span class="tnt-chip">{int(word_count or 0):,} từ</span>'
-        f'<span class="tnt-chip{status_class}">{status_label}</span>'
+        f'<span class="app-chip">{suffix} · {size_kb:,.1f} KB</span>'
+        f'<span class="app-chip">{int(word_count or 0):,} từ</span>'
+        f'<span class="app-chip{status_class}">{status_label}</span>'
     )
 
     placeholder.markdown(
-        '<div class="tnt-context">'
-        f'<div class="tnt-context__title">{title}</div>'
-        f'<div class="tnt-context__chips">{chips}</div>'
+        '<div class="app-context">'
+        f'<div class="app-context__title">{title}</div>'
+        f'<div class="app-context__chips">{chips}</div>'
         "</div>",
         unsafe_allow_html=True,
     )
@@ -143,16 +143,16 @@ def render_document(
     with placeholder.container():
         if preview is None:
             st.markdown(
-                '<div class="tnt-panel-head">'
-                '<span class="tnt-panel-head__title">Bản xem trước tài liệu</span>'
-                '<span class="tnt-panel-head__meta">Chưa có tài liệu</span>'
+                '<div class="app-panel-head">'
+                '<span class="app-panel-head__title">Bản xem trước tài liệu</span>'
+                '<span class="app-panel-head__meta">Chưa có tài liệu</span>'
                 "</div>"
-                '<div class="tnt-empty"><strong>Tải bài báo lên để bắt đầu</strong></div>',
+                '<div class="app-empty"><strong>Tải bài báo lên để bắt đầu</strong></div>',
                 unsafe_allow_html=True,
             )
             return
 
-        notice = f'<div class="tnt-preview-notice">{preview.warning}</div>' if preview.warning else ""
+        notice = f'<div class="app-preview-notice">{preview.warning}</div>' if preview.warning else ""
         if notice:
             st.markdown(notice, unsafe_allow_html=True)
 
@@ -166,7 +166,7 @@ def render_document(
 
         if preview.kind == "html" and isinstance(preview.content, str):
             components.html(
-                f"{_IFRAME_CSS}<div class='tnt-doc'>{preview.content}</div>",
+                f"{_IFRAME_CSS}<div class='app-doc'>{preview.content}</div>",
                 height=1100,
                 scrolling=True,
             )
@@ -181,31 +181,31 @@ def _structure_busy_html(state: str) -> str:
         summary = "Đang phân tích các mục yêu cầu trong tài liệu..."
 
     return (
-        '<div class="tnt-results"><div class="tnt-results__head">'
-        '<div class="tnt-results__title-row">'
-        '<span class="tnt-spinner" aria-hidden="true"></span>'
-        f'<div class="tnt-results__title">{title}</div>'
+        '<div class="app-results"><div class="app-results__head">'
+        '<div class="app-results__title-row">'
+        '<span class="app-spinner" aria-hidden="true"></span>'
+        f'<div class="app-results__title">{title}</div>'
         "</div>"
-        f'<div class="tnt-results__summary">{summary}</div>'
-        '<div class="tnt-progress"><div class="tnt-progress__bar tnt-progress__bar--indeterminate"></div></div>'
+        f'<div class="app-results__summary">{summary}</div>'
+        '<div class="app-progress"><div class="app-progress__bar app-progress__bar--indeterminate"></div></div>'
         "</div></div>"
     )
 
 
 def _structure_error_html(message: str) -> str:
     return (
-        '<div class="tnt-results tnt-results--error"><div class="tnt-results__head">'
-        '<div class="tnt-results__title">Không thể kiểm tra cấu trúc</div>'
-        f'<div class="tnt-results__summary">{html.escape(message)}</div>'
+        '<div class="app-results app-results--error"><div class="app-results__head">'
+        '<div class="app-results__title">Không thể kiểm tra cấu trúc</div>'
+        f'<div class="app-results__summary">{html.escape(message)}</div>'
         "</div></div>"
     )
 
 
 def _structure_idle_html() -> str:
     return (
-        '<div class="tnt-results"><div class="tnt-results__head">'
-        '<div class="tnt-results__title">Kết quả cấu trúc</div>'
-        '<div class="tnt-results__summary">Chưa kiểm tra cấu trúc.</div>'
+        '<div class="app-results"><div class="app-results__head">'
+        '<div class="app-results__title">Kết quả cấu trúc</div>'
+        '<div class="app-results__summary">Chưa kiểm tra cấu trúc.</div>'
         "</div></div>"
     )
 

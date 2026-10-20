@@ -227,9 +227,9 @@ with workspace:
 
     with action_col:
         st.markdown(
-            '<div class="tnt-appbar">'
-            '<div class="tnt-brand">'
-            f'<div><div class="tnt-brand__name">{settings.brand_label}</div>'
+            '<div class="app-appbar">'
+            '<div class="app-brand">'
+            f'<div><div class="app-brand__name">{settings.brand_label}</div>'
             "</div>"
             "</div></div>",
             unsafe_allow_html=True,
@@ -242,10 +242,10 @@ with workspace:
         )
         with st.container(border=True, key=action_panel_key):
             st.markdown(
-                '<div class="tnt-document-actions">'
-                '<div class="tnt-document-actions__eyebrow">Thao tác</div>'
-                f'<div class="tnt-document-actions__title">{action_state.title}</div>'
-                f'<div class="tnt-document-actions__subtitle">{action_state.subtitle}</div>'
+                '<div class="app-document-actions">'
+                '<div class="app-document-actions__eyebrow">Thao tác</div>'
+                f'<div class="app-document-actions__title">{action_state.title}</div>'
+                f'<div class="app-document-actions__subtitle">{action_state.subtitle}</div>'
                 "</div>",
                 unsafe_allow_html=True,
             )

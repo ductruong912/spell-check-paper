@@ -144,8 +144,8 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
 
     return Settings(
         project_root=PROJECT_ROOT,
-        app_title=env_str("APP_TITLE", "TNT Check AI"),
-        brand_label=env_str("BRAND_LABEL", "TNT Paper Review"),
+        app_title=env_str("APP_TITLE", "ArticleCheck AI"),
+        brand_label=env_str("BRAND_LABEL", "Paper Review"),
         supported_extensions=env_csv("SUPPORTED_EXTENSIONS", ("docx", "pdf")),
         openai_api_key=env_optional_str("OPENAI_API_KEY"),
         default_llm_model=env_str("DEFAULT_LLM_MODEL", "gpt-4.1-mini"),
