@@ -215,6 +215,36 @@ def _build_structure_prompt(view_text: str) -> str:
     )
 
 
+def _create_structure_completion(
+    client: OpenAI,
+    *,
+    model: str,
+    prompt: str,
+    response_format: Any,
+):
+    from openai import BadRequestError
+
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_completion_tokens": OPENAI_MAX_TOKENS,
+        "response_format": response_format,
+        "temperature": OPENAI_TEMPERATURE,
+    }
+    try:
+        return client.chat.completions.create(**request)
+    except BadRequestError as exc:
+        if "temperature" not in str(exc):
+            raise
+        logger.warning(
+            "Model %s rejected temperature=%s; retrying with the model default.",
+            model,
+            OPENAI_TEMPERATURE,
+        )
+        request.pop("temperature", None)
+        return client.chat.completions.create(**request)
+
+
 def llm_detect_structure(*, view_text: str, openai_model: str = DEFAULT_LLM_MODEL) -> Dict[str, Any]:
     if not OPENAI_AVAILABLE:
         raise RuntimeError("OPENAI_AVAILABLE=False (pip install openai)")
@@ -228,20 +258,18 @@ def llm_detect_structure(*, view_text: str, openai_model: str = DEFAULT_LLM_MODE
     response_format = _structure_response_format()
 
     try:
-        resp = client.chat.completions.create(
+        resp = _create_structure_completion(
+            client,
             model=openai_model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=OPENAI_TEMPERATURE,
-            max_tokens=OPENAI_MAX_TOKENS,
+            prompt=prompt,
             response_format=response_format,
         )
     except TypeError:
         fallback_format: Any = {"type": "json_object"}
-        resp = client.chat.completions.create(
+        resp = _create_structure_completion(
+            client,
             model=openai_model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=OPENAI_TEMPERATURE,
-            max_tokens=OPENAI_MAX_TOKENS,
+            prompt=prompt,
             response_format=fallback_format,
         )
 
