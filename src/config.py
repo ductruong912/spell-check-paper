@@ -227,7 +227,7 @@ def load_valid_paper_config() -> ValidPaperConfig:
         ),
         reranker_model_name=env_str(
             "VALID_RERANKER_MODEL_NAME",
-            "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            "cross-encoder/stsb-distilroberta-base",
         ),
         embedding_batch_size=env_int("EMBEDDING_BATCH_SIZE", 32),
         torch_num_threads=env_int("TORCH_NUM_THREADS", 0),
@@ -250,7 +250,7 @@ def load_reviewer_config() -> ReviewerConfig:
             "REVIEWER_RERANKER_MODEL_NAME",
             env_str(
                 "VALID_RERANKER_MODEL_NAME",
-                "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                "cross-encoder/stsb-distilroberta-base",
             ),
         ),
         embedding_batch_size=env_int("EMBEDDING_BATCH_SIZE", 32),

@@ -265,10 +265,11 @@ Key settings configurable via environment variables in `.env`:
 | `DEFAULT_MIN_CONFIDENCE` | `0.70` | Minimum confidence score to accept an extracted section |
 | `STRUCTURE_TEMPLATE_PATH` | *(Default)* | Custom JSON template file for section criteria |
 | `VALID_PAPER_STORE_PATH` | `data_valid_paper_store` | Path for domain-scoped valid paper Qdrant stores |
-| `VALID_MODEL_NAME` | `BAAI/bge-small-en-v1.5` | Dense embedding model for manuscripts |
+| `VALID_MODEL_NAME` | `BAAI/bge-base-en-v1.5` | Dense embedding model for manuscripts (768 dimensions) |
 | `VALID_RERANKER_MODEL_NAME` | `cross-encoder/stsb-distilroberta-base` | Cross-encoder model for reranking candidates |
 | `VALID_SUITABLE_THRESHOLD` | `0.50` | Threshold score for domain suitability decision |
 | `REVIEWER_STORE_PATH` | `data_reviewer_store` | Path for Qdrant reviewer expertise stores |
+| `REVIEWER_MODEL_NAME` | `BAAI/bge-base-en-v1.5` | Dense embedding model for reviewer titles (768 dimensions) |
 | `REVIEWER_RERANKER_MODEL_NAME`| `cross-encoder/stsb-distilroberta-base` | Cross-encoder model for reviewer candidate scoring |
 
 ---
